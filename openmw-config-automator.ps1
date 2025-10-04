@@ -11,7 +11,7 @@
     04. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
     05. Saves choices to individual files for persistence.
     06. Reads a custom exclusion file ('exclusions\removedata.txt') to generate a 'removeData' block.
-    07. Generates the momw-customizations.toml file.
+    07. Generates the momw-customizations.toml file with correct formatting.
     08. Manages backups of the previous customization file and old log files.
     09. Runs the MOMW configurator with a native PowerShell progress bar.
     10. Rearranges a specific line within the final openmw.cfg for load order optimization.
@@ -377,7 +377,8 @@ if ($ExclusionsDirectoryPath) {
         $exclusionLines = Get-Content -Path $exclusionFilePath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         if ($exclusionLines.Count -gt 0) {
             Write-Host "  Found $($exclusionLines.Count) exclusion(s) in 'removedata.txt'." -ForegroundColor Green
-            $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "data=' + ($_ -replace '\\', '\\') + '"' }
+            # Correctly format each line as a quoted string for the TOML array
+            $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "' + $_ + '"' }
             $removeDataContent = $formattedExclusionLines -join ",`n"
             $removeDataBlock = @"
 removeData = [
