@@ -1,53 +1,84 @@
-# This script automates staging, committing, and pushing your changes to GitHub.
+<#
+.SYNOPSIS
+    A robust script to automatically stash, pull, commit, and push changes to a Git repository.
+.DESCRIPTION
+    This script is designed to be called by the main automator. It safely synchronizes
+    the local and remote repositories by stashing local changes before pulling,
+    ensuring no local work is overwritten. It includes error checking at each step.
+#>
 
-# Clear the screen for a clean start
-Clear-Host
+# --- Script Body ---
 
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "   🚀 Git Upload Automation Script   "
-Write-Host "========================================" -ForegroundColor Green
+# Get the directory of the currently running script.
+$scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
+Set-Location -Path $scriptPath
 
-# --- 1. Prompt for the commit message ---
-# Ask the user to describe the changes they made.
-Write-Host "`nPlease enter a short description of the changes you made." -ForegroundColor Cyan
-$commitMessage = Read-Host "Commit Message"
+Write-Host "--- Starting Git Synchronization ---" -ForegroundColor White
 
-# Check if the user just pressed Enter without typing anything.
-if ([string]::IsNullOrWhiteSpace($commitMessage)) {
-    Write-Host "`n❌ Commit message cannot be empty. Aborting script." -ForegroundColor Red
-    Read-Host "Press Enter to exit."
-    exit # Stops the script
-}
-
-Write-Host "`n-------------------------------------------`n" -ForegroundColor Gray
-
-# --- 2. Stage all files ---
-Write-Host "STEP 1: Staging all changed files (git add .)..." -ForegroundColor Yellow
-git add .
-Write-Host "✅ Files staged." -ForegroundColor Green
-
-# --- 3. Commit the changes ---
-Write-Host "`nSTEP 2: Committing with your message..." -ForegroundColor Yellow
-# The $commitMessage variable is used here.
-git commit -m "$commitMessage"
-
-# Check if the commit was successful. If not, it might be because there were no changes.
+# --- STEP 1: Stash any uncommitted local changes ---
+Write-Host "STEP 1: Stashing local changes for a clean pull (git stash)..." -ForegroundColor Cyan
+git stash
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "`n⚠️  No changes were committed. This usually means everything was already saved." -ForegroundColor Yellow
-    Read-Host "Press Enter to exit."
-    exit
+    Write-Host "❌ ERROR: 'git stash' failed. Cannot proceed." -ForegroundColor Red
+    exit 1
 }
-Write-Host "✅ Changes committed." -ForegroundColor Green
+Write-Host "✅ Local changes stashed." -ForegroundColor Green
+
+# --- STEP 2: Pull changes from the remote repository ---
+Write-Host "`nSTEP 2: Pulling latest changes from remote (git pull)..." -ForegroundColor Cyan
+git pull
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ ERROR: 'git pull' failed. Please check your connection and credentials." -ForegroundColor Red
+    # Attempt to restore the stash before exiting
+    git stash pop
+    exit 1
+}
+Write-Host "✅ Pulled from remote repository." -ForegroundColor Green
+
+# --- STEP 3: Re-apply stashed changes ---
+Write-Host "`nSTEP 3: Re-applying stashed local changes (git stash pop)..." -ForegroundColor Cyan
+git stash pop
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ ERROR: 'git stash pop' failed. This is likely due to a merge conflict." -ForegroundColor Red
+    Write-Host "  Please resolve the conflicts manually in your code editor, then run 'git add .' and 'git commit' before trying again." -ForegroundColor Red
+    exit 1
+}
+Write-Host "✅ Stashed changes re-applied." -ForegroundColor Green
 
 
-# --- 4. Push to the remote repository ---
-Write-Host "`nSTEP 3: Pushing changes to GitHub (git push)..." -ForegroundColor Yellow
+# --- STEP 4: Add all new and modified files to the staging area ---
+Write-Host "`nSTEP 4: Staging all changes (git add .)..." -ForegroundColor Cyan
+git add .
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ ERROR: 'git add' failed." -ForegroundColor Red
+    exit 1
+}
+Write-Host "✅ Staged all changes." -ForegroundColor Green
+
+# --- STEP 5: Commit the changes ---
+Write-Host "`nSTEP 5: Committing changes (git commit)..." -ForegroundColor Cyan
+# Check if there's anything to commit
+$status = git status --porcelain
+if ($status) {
+    git commit -m "Automated backup triggered by script."
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "❌ ERROR: 'git commit' failed." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "✅ Committed changes." -ForegroundColor Green
+} else {
+    Write-Host "  No new changes to commit." -ForegroundColor Gray
+}
+
+
+# --- STEP 6: Push the changes to the remote repository ---
+Write-Host "`nSTEP 6: Pushing changes to GitHub (git push)..." -ForegroundColor Cyan
 git push
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ ERROR: 'git push' failed. Please check your connection and credentials." -ForegroundColor Red
+    exit 1
+}
 Write-Host "✅ Pushed to remote repository." -ForegroundColor Green
 
+Write-Host "`n--- Git Synchronization Complete ---" -ForegroundColor White
 
-# --- Final Message ---
-Write-Host "`n-------------------------------------------`n" -ForegroundColor Gray
-Write-Host "🎉 Success! All changes have been uploaded to GitHub." -ForegroundColor Magenta
-Write-Host "`n"
-Read-Host "Press Enter to close this window."

@@ -6,12 +6,12 @@
 .DESCRIPTION
     This script provides a full end-to-end automation for a custom mod folder.
     01. Backs up itself, adding a header with the date and number of lines changed.
-    02. Clears the console and starts a log file in a dedicated working directory.
+    02. Clears the console and starts a new, uniquely named log file for each run.
     03. Sanitizes top-level folder names in the mod directory.
     04. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
     05. Saves choices to individual files for persistence.
     06. Generates the momw-customizations.toml file.
-    07. Manages backups of the previous customization file.
+    07. Manages backups of the previous customization file and old log files.
     08. Runs the MOMW configurator with a native PowerShell progress bar.
     09. Rearranges a specific line within the final openmw.cfg for load order optimization.
     10. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
@@ -40,6 +40,7 @@ $OutputFile = Join-Path -Path $OutputDirectory -ChildPath $OutputFilename
 
 # The number of backup files to keep.
 $BackupVersionsToKeep = 7
+$LogVersionsToKeep = 7
 
 
 # --- Script Body ---
@@ -117,9 +118,28 @@ if ($ResolvedWorkingDirectory) {
 
 # --- 3. Setup Logging ---
 if ($ResolvedWorkingDirectory) {
-    $LogFilePath = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "mod_organizer_log.txt"
-    Start-Transcript -Path $LogFilePath -Force
+    # Manage old logs, keeping the configured number of recent logs
+    $logPattern = "mod_organizer_log_*.txt"
+    $allLogs = Get-ChildItem -Path $ResolvedWorkingDirectory -Filter $logPattern | Sort-Object CreationTime -Descending
+    
+    if ($allLogs.Count -ge $LogVersionsToKeep) {
+        $logsToDelete = $allLogs | Select-Object -Skip ($LogVersionsToKeep - 1)
+        foreach ($log in $logsToDelete) {
+            Write-Host "  Removing old log: $($log.Name)" -ForegroundColor Magenta
+            Remove-Item -Path $log.FullName -Force
+        }
+    }
+
+    # Create a new, unique log file name for this run
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $newLogFileName = "mod_organizer_log_$timestamp.txt"
+    $LogFilePath = Join-Path -Path $ResolvedWorkingDirectory -ChildPath $newLogFileName
+    
+    # Start the transcript with the new, unique file
+    Start-Transcript -Path $LogFilePath
+    Write-Host "Logging output to: $newLogFileName" -ForegroundColor DarkGray
 }
+
 
 # --- 4. Sanitize Top-Level Folder Names ---
 Write-Host "`nSanitizing top-level folder names in '$ModRootDirectory'..." -ForegroundColor Cyan
