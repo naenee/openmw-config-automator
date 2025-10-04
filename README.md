@@ -30,7 +30,7 @@ These scrolls were scribed for the author's personal sanctum. The inscribed path
 To command these powerful tools, you must observe the proper rites:
 
 Place your alterations (mods) in D:\modding\Morrowind\custom.
-Ensure the lesser golem (momw-configurator.exe) resides in D:\modding\Morrowind\momw-tools-pack.
+Ensure the lesser golem (momw-configurator.exe) resides in ..\momw-tools-pack.
 Utter the incantation (openmw-config-automator.ps1) from a PowerShell.
 Answer the Automaton's queries when your wisdom is sought.
 
