@@ -1,37 +1,25 @@
-Tome of the Automaton Enchanter
+# Scrolls of the Automaton Enchanter
 
-Found among the effects of a traveling Telvanni master, this text describes two powerful scripts of Dwemer-like artifice, designed to bring order to the chaos of a thousand-and-one alterations
+Hark, Outlander, for you have uncovered a tome of great power. Within these digital pages lie two enchantments of Dwemer-like ingenuity, forged to bring order to the chaotic process of customizing the visions one experiences through the Seeing-Glass of OpenMW.
 
-The First Scroll: The Rite of Harmonious Integration (openmw-config-automator.ps1).
-This master script is an automaton that orchestrates your alterations with tireless precision.
-When its incantation is uttered, it performs the following rites:
+These scripts were scribed to automate the selection and ordering of arcane scrolls (`.esp`, `.omwaddon`) and enchanted textures (`Textures`, `Meshes`) for a private collection. They are a chronicle of one enchanter's journey.
 
-Cleansing and Scrying:
+### Scribe's Note on Provenance
 
-It first cleanses your alteration-containers (mod folders) of improper symbols.
-It then scries their contents, navigating complex structures and consulting your will when faced with multiple paths (such as FOMOD installers).
+Be warned, traveler. These enchantments are of a personal nature, tuned to the specific ley-lines and astral configurations of their creator's domain (their PC). The paths and incantations herein may not suit your own realm without alteration. This is a private grimoire, not a public work for the Mages Guild. As such, no succor or support shall be provided should the enchantments go awry. Proceed with scholarly caution.
 
-Scribing and Forging:
+### The Primary Enchantment: `openmw-config-automator.ps1`
 
-Your choices are scribed to memory scrolls (the mod_choices folder) for future use.
-Once your will is known, it forges a master decree (momw-customizations.toml) and commands a lesser golem (momw-configurator) to enact it upon the openmw.cfg.
+This is the master ritual. When invoked, it will perform a complex series of rites to organize your collected works and prepare them for the Seeing-Glass.
 
-The Final Ordering:
+**Rites of Invocation:**
 
-As a final touch, it ensures specific incantations (like content=LuaMultiMark.omwaddon) are placed in their proper sequence within the openmw.cfg.
-The Second Scroll: The Aetherial Scribe(save-to-git.ps1)This lesser scroll is a loyal scribe, tasked with preserving the masterwork in the Aetherial Archive (your GitHub repository).
-The scribe is summoned only when wisdom deems it necessary: upon significant alteration to the master scroll, or upon the passing of a day, ensuring no great work is ever lost.
+* **The Rite of Purity:** It first purifies the names of your collected works, stripping them of clumsy markings to prevent cosmic misalignments.
+* **The Rite of Divination:** The script then scries your collection, discerning the nature of each artifact. Should it find a work with multiple potential forms (e.g., "00 Core," "01 Patches"), it will seek your counsel. Your choices are remembered in a 'mod_choices' folio for future rites.
+* **The Rite of Scribing:** A `momw-customizations.toml` scroll is scribed, listing the precise order and location of your chosen artifacts.
+* **The Rite of Configuration:** The grand `momw-configurator` automaton is summoned to imbue your primary Seeing-Glass configuration (`openmw.cfg`) with the new order.
+* **The Rite of Final Adjustment:** A final, subtle enchantment is cast upon the `openmw.cfg` scroll to ensure a specific artifact (`LuaMultiMark.omwaddon`) is placed in its proper sequence.
 
-The Rites of Invocation
+### The Lesser Enchantment: `save-to-git.ps1`
 
-A note to fellow enchanters:
-
-These scrolls were scribed for the author's personal sanctum. The inscribed paths reflect that domain and may require alteration to function within your own.
-To command these powerful tools, you must observe the proper rites:
-
-Place your alterations (mods) in D:\modding\Morrowind\custom.
-Ensure the lesser golem (momw-configurator.exe) resides in ..\momw-tools-pack.
-Utter the incantation (openmw-config-automator.ps1) from a PowerShell.
-Answer the Automaton's queries when your wisdom is sought.
-
-Go forth, Enchanter. Your world awaits its master.
+This is a familiar, a loyal servant summoned by the primary enchantment. Its sole purpose is to create a perfect, incorporeal copy of these works in the Aetherial Archive known as GitHub. It ensures that should disaster strike, your knowledge is not lost to the ages. It is intelligent, and will only perform its task when it senses a change in the weave, or when a full day has passed.

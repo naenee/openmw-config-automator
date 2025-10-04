@@ -15,6 +15,10 @@
     08. Runs the MOMW configurator with a native PowerShell progress bar.
     09. Rearranges a specific line within the final openmw.cfg for load order optimization.
     10. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
+
+.NOTES
+    This is a personal script, tailored for a specific workflow. It is provided as-is
+    and is not a community project. No support will be provided.
 #>
 
 # --- Clear Screen ---
@@ -553,4 +557,3 @@ Write-Host "`nAll steps completed!" -ForegroundColor Green
 if ($global:Transcript) {
     Stop-Transcript
 }
-

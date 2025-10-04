@@ -5,6 +5,9 @@
     This script is designed to be called by the main automator. It safely synchronizes
     the local and remote repositories by stashing local changes before pulling,
     and intelligently handles cases where there are no local changes to stash.
+.NOTES
+    This is a personal script, tailored for a specific workflow. It is provided as-is
+    and is not a community project. No support will be provided.
 #>
 
 # --- Script Body ---
