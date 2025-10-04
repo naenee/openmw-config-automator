@@ -1,22 +1,20 @@
 <#
 .SYNOPSIS
-    Cleans mod folder names, interactively handles nested mod options, generates a
-    momw-customizations.toml file, manages backups, updates the final OpenMW configuration,
-    and performs a final tweak on the openmw.cfg file, logging all output to a file.
+    Performs a self-backup, cleans mod folder names, interactively handles nested mod options,
+    generates a momw-customizations.toml file, and intelligently backs up to GitHub only on success.
 
 .DESCRIPTION
-    This script provides a full end-to-end automation for a custom mod folder, running
-    entirely within the console. It features a robust "drill-down" processing system
-    to handle mods with multiple nested levels of choices (FOMOD-style installers).
-    1. Clears the console screen for a clean session.
-    2. Sanitizes top-level folder names in the mod directory.
-    3. Scans a custom mod folder and precisely identifies the correct data paths.
-    4. Choices are saved into individual files within a dedicated working directory.
-    5. Generates the momw-customizations.toml file.
-    6. Manages backups of the previous customization file.
-    7. Runs the MOMW configurator with a native PowerShell progress bar that is not logged.
-    8. Rearranges a specific line within the final openmw.cfg for load order optimization.
-    9. All console output is automatically saved to a log file in the working directory.
+    This script provides a full end-to-end automation for a custom mod folder.
+    1. Backs up itself, adding a header with the date and number of lines changed.
+    2. Clears the console and starts a log file in a dedicated working directory.
+    3. Sanitizes top-level folder names in the mod directory.
+    4. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
+    5. Saves choices to individual files for persistence.
+    6. Generates the momw-customizations.toml file.
+    7. Manages backups of the previous customization file.
+    8. Runs the MOMW configurator with a native PowerShell progress bar.
+    9. Rearranges a specific line within the final openmw.cfg for load order optimization.
+    10. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
 #>
 
 # --- Clear Screen ---
@@ -46,7 +44,7 @@ $BackupVersionsToKeep = 7
 
 # --- Script Body ---
 
-# --- 1. Resolve Working Directory and Setup Logging ---
+# --- 1. Resolve Working Directory ---
 $ResolvedWorkingDirectory = $null
 if ($PSScriptRoot) {
     $ResolvedWorkingDirectory = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath $WorkingDirectory)
@@ -54,15 +52,79 @@ if ($PSScriptRoot) {
         Write-Host "Creating new working directory at: $ResolvedWorkingDirectory" -ForegroundColor DarkGray
         New-Item -ItemType Directory -Path $ResolvedWorkingDirectory | Out-Null
     }
-    $LogFilePath = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "mod_organizer_log.txt"
-    Start-Transcript -Path $LogFilePath -Force
 } else {
     Write-Warning "Could not determine script location. Logging and choice saving will be disabled."
 }
 
 
-# --- 2. Sanitize Top-Level Folder Names ---
-Write-Host "Sanitizing top-level folder names in '$ModRootDirectory'..." -ForegroundColor Cyan
+# --- 2. Self-Backup and Versioning ---
+Write-Host "Performing self-backup and versioning..." -ForegroundColor Cyan
+
+$thisScriptPath = $MyInvocation.MyCommand.Path
+$thisScriptName = Split-Path -Path $thisScriptPath -Leaf
+$contentHasChanged = $false
+$timeSinceLastBackup = $null
+
+if ($ResolvedWorkingDirectory) {
+    $selfBackupDir = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "script_backups"
+    if (-not (Test-Path $selfBackupDir)) {
+        New-Item -ItemType Directory -Path $selfBackupDir | Out-Null
+    }
+
+    $latestBackup = Get-ChildItem -Path $selfBackupDir -Filter "$thisScriptName.backup.*.ps1" | Sort-Object CreationTime -Descending | Select-Object -First 1
+    $currentScriptContent = Get-Content -Path $thisScriptPath
+    
+    $headerDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $header = ""
+
+    # Hash comparison logic
+    $currentHash = (Get-FileHash -Path $thisScriptPath -Algorithm SHA256).Hash
+    $hashFilePath = Join-Path -Path $selfBackupDir -ChildPath "latest_hash.txt"
+    $oldHash = if (Test-Path $hashFilePath) { Get-Content $hashFilePath } else { "" }
+
+    if ($currentHash -ne $oldHash) {
+        $contentHasChanged = $true
+    }
+
+    if ($latestBackup) {
+        $timeSinceLastBackup = (Get-Date) - $latestBackup.CreationTime
+        $diff = Compare-Object -ReferenceObject (Get-Content $latestBackup.FullName) -DifferenceObject $currentScriptContent
+        $linesChanged = ($diff | Measure-Object).Count
+        $header = "<# .VERSION_INFO`n    Backup Date: $headerDate`n    Lines Changed Since Last Backup: $linesChanged`n#>"
+    } else {
+        $header = "<# .VERSION_INFO`n    Backup Date: $headerDate`n    Initial Backup.`n#>"
+        $contentHasChanged = $true # Always treat the first run as a change
+    }
+
+    $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+    $newBackupName = "$thisScriptName.backup.$timestamp.ps1"
+    $newBackupPath = Join-Path -Path $selfBackupDir -ChildPath $newBackupName
+    
+    ($header + "`n" + ($currentScriptContent | Out-String)) | Set-Content -Path $newBackupPath
+    Set-Content -Path $hashFilePath -Value $currentHash
+
+    Write-Host "  Successfully created backup: $newBackupName" -ForegroundColor Green
+
+    $allBackups = Get-ChildItem -Path $selfBackupDir -Filter "$thisScriptName.backup.*.ps1" | Sort-Object CreationTime -Descending
+    if ($allBackups.Count -gt $BackupVersionsToKeep) {
+        $allBackups | Select-Object -Skip $BackupVersionsToKeep | ForEach-Object {
+            Write-Host "  Removing old backup: $($_.Name)" -ForegroundColor Magenta
+            Remove-Item -Path $_.FullName -Force
+        }
+    }
+}
+
+
+# --- 3. Setup Logging ---
+if ($ResolvedWorkingDirectory) {
+    $LogFilePath = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "mod_organizer_log.txt"
+    Start-Transcript -Path $LogFilePath -Force
+}
+
+# --- 4. Sanitize Top-Level Folder Names ---
+Write-Host "`nSanitizing top-level folder names in '$ModRootDirectory'..." -ForegroundColor Cyan
+
+$scriptSuccessfullyCompleted = $true # Assume success until an error occurs
 
 if (-Not (Test-Path -Path $ModRootDirectory -PathType Container)) {
     Write-Error "The directory specified does not exist: $ModRootDirectory"
@@ -72,7 +134,6 @@ if (-Not (Test-Path -Path $ModRootDirectory -PathType Container)) {
 
 Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
     $oldName = $_.Name
-    # Create the new name by replacing all non-alphanumeric characters.
     $newName = $oldName -replace "[^a-zA-Z0-9]", ""
     
     if ($oldName -ne $newName) {
@@ -87,8 +148,7 @@ Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
 }
 
 
-# --- 3. Generate TOML File ---
-
+# --- 5. Generate TOML File ---
 if (-not (Test-Path $OutputDirectory -PathType Container)) {
     Write-Host "`nOutput directory not found. Creating it: $OutputDirectory" -ForegroundColor Yellow
     New-Item -Path $OutputDirectory -ItemType Directory -Force | Out-Null
@@ -96,7 +156,6 @@ if (-not (Test-Path $OutputDirectory -PathType Container)) {
 
 Write-Host "`nScanning for mods in: $ModRootDirectory" -ForegroundColor Cyan
 
-# --- Load or initialize mod choices from a dedicated folder ---
 $ChoicesDirectoryPath = $null
 if ($ResolvedWorkingDirectory) {
     $ChoicesDirectoryPath = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "mod_choices"
@@ -108,12 +167,9 @@ if ($ResolvedWorkingDirectory) {
     }
 }
 
-
-# --- Scan and process mods using a Queue ---
 $finalModPaths = [System.Collections.Generic.List[string]]::new()
 $finalPluginFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
 
-# The queue stores objects with the original top-level mod name and the current path to process
 $processingQueue = [System.Collections.Queue]::new()
 Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
     $queueObject = [PSCustomObject]@{ TopLevelModName = $_.Name; PathToProcess = $_.FullName }
@@ -128,7 +184,6 @@ while ($processingQueue.Count -gt 0) {
     $numberedOptions = Get-ChildItem -Path $currentPath -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "^\d{2}" } | Sort-Object Name
 
     if ($numberedOptions.Count -gt 0) {
-        # Check for the special '00 Core' case first
         if ($numberedOptions.Count -eq 1 -and $numberedOptions[0].Name -imatch '00 Core*') {
             Write-Host ""
             Write-Host "Options for '$topLevelModName' in '$($currentItem.PathToProcess | Split-Path -Leaf)':" -ForegroundColor Yellow
@@ -138,7 +193,6 @@ while ($processingQueue.Count -gt 0) {
             $queueObject = [PSCustomObject]@{ TopLevelModName = $topLevelModName; PathToProcess = $selectedDir.FullName }
             $processingQueue.Enqueue($queueObject)
         } else {
-            # --- This is a regular CHOICE NODE with multiple options ---
             Write-Host ""
             Write-Host "Options for '$topLevelModName' in '$($currentItem.PathToProcess | Split-Path -Leaf)':" -ForegroundColor Yellow
             
@@ -267,7 +321,6 @@ if ($finalModPaths.Count -eq 0) {
     exit
 }
 
-# --- Process found mods ---
 Write-Host "`n--- Summary of mods to be included ---" -ForegroundColor White
 $allModPaths = $finalModPaths | Sort-Object -Unique
 $formattedModPaths = $allModPaths | ForEach-Object {
@@ -330,107 +383,145 @@ try {
 }
 catch {
     Write-Host "An error occurred while writing to the file: $($_.Exception.Message)" -ForegroundColor Red
-    if ($global:Transcript) { Stop-Transcript }
-    exit
+    $scriptSuccessfullyCompleted = $false
 }
 
-# --- 4. Update OpenMW Configuration with Progress Indicator ---
-Write-Host "`nRunning MOMW Configurator to apply changes..." -ForegroundColor Cyan
+# --- 6. Update OpenMW Configuration ---
+if ($scriptSuccessfullyCompleted) {
+    Write-Host "`nRunning MOMW Configurator to apply changes..." -ForegroundColor Cyan
 
-$hasErrors = $false
-$lastLine = ""
-try {
-    $configuratorPath = Join-Path -Path $ToolsDirectory -ChildPath "momw-configurator.exe"
-    $job = Start-Job -ScriptBlock { & $using:configuratorPath config expanded-vanilla --verbose 2>&1 }
-    
-    $spinner = '|', '/', '-', '\'
-    $spinnerIndex = 0
-    
-    while ($job.State -eq 'Running') {
-        $statusText = "Processing... " + $spinner[$spinnerIndex]
-        Write-Progress -Activity "Running MOMW Configurator" -Status $statusText
-        Start-Sleep -Milliseconds 150
-        $spinnerIndex = ($spinnerIndex + 1) % $spinner.Length
-    }
-
-    Write-Progress -Activity "Running MOMW Configurator" -Completed
-    
-    $output = Receive-Job $job
-    $lastLine = $output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1
-    
-    $ignorePatterns = @(
-        'Skipping record of type SCPT',
-        'could not be loaded due to error: Unexpected Tag: LUAL',
-        'ignored empty value for key'
-    )
-
-    $allWarningsAndErrors = $output | Where-Object { $_ -match 'warning' -or $_ -match 'error' }
-
-    $relevantErrorsAndWarnings = $allWarningsAndErrors
-    foreach ($pattern in $ignorePatterns) {
-        $relevantErrorsAndWarnings = $relevantErrorsAndWarnings | Where-Object { $_ -notmatch $pattern }
-    }
-
-    if ($relevantErrorsAndWarnings.Count -gt 0) {
-        $hasErrors = $true
-        Write-Host "MOMW Configurator completed with relevant warnings or errors:" -ForegroundColor Red
-        $relevantErrorsAndWarnings | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
-    } else {
-         Write-Host "Configuration applied successfully (all benign issues filtered out)." -ForegroundColor Green
-    }
-}
-catch {
-    $hasErrors = $true
-    Write-Host "A critical error occurred while running the configurator: $($_.Exception.Message)" -ForegroundColor Red
-}
-finally {
-    if ($job) { Remove-Job $job -Force }
-}
-
-if ($hasErrors) {
-    if ($lastLine) {
-        if ($lastLine -imatch 'completed') {
-             Write-Host "`nFinal status from configurator: $lastLine" -ForegroundColor Green
-        } else {
-             Write-Host "`nFinal status from configurator: $lastLine" -ForegroundColor Red
+    $lastLine = ""
+    try {
+        $configuratorPath = Join-Path -Path $ToolsDirectory -ChildPath "momw-configurator.exe"
+        $job = Start-Job -ScriptBlock { & $using:configuratorPath config expanded-vanilla --verbose 2>&1 }
+        
+        $spinner = '|', '/', '-', '\'
+        $spinnerIndex = 0
+        
+        while ($job.State -eq 'Running') {
+            $statusText = "Processing... " + $spinner[$spinnerIndex]
+            Write-Progress -Activity "Running MOMW Configurator" -Status $statusText
+            Start-Sleep -Milliseconds 150
+            $spinnerIndex = ($spinnerIndex + 1) % $spinner.Length
         }
-    } else {
-        Write-Host "`nScript finished with errors during configuration." -ForegroundColor Red
+
+        Write-Progress -Activity "Running MOMW Configurator" -Completed
+        
+        $output = Receive-Job $job
+        $lastLine = $output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1
+        
+        $ignorePatterns = @(
+            'Skipping record of type SCPT',
+            'could not be loaded due to error: Unexpected Tag: LUAL',
+            'ignored empty value for key'
+        )
+
+        $allWarningsAndErrors = $output | Where-Object { $_ -match 'warning' -or $_ -match 'error' }
+
+        $relevantErrorsAndWarnings = $allWarningsAndErrors
+        foreach ($pattern in $ignorePatterns) {
+            $relevantErrorsAndWarnings = $relevantErrorsAndWarnings | Where-Object { $_ -notmatch $pattern }
+        }
+
+        if ($relevantErrorsAndWarnings.Count -gt 0) {
+            $scriptSuccessfullyCompleted = $false
+            Write-Host "MOMW Configurator completed with relevant warnings or errors:" -ForegroundColor Red
+            $relevantErrorsAndWarnings | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+        } else {
+             Write-Host "Configuration applied successfully (all benign issues filtered out)." -ForegroundColor Green
+        }
+    }
+    catch {
+        $scriptSuccessfullyCompleted = $false
+        Write-Host "A critical error occurred while running the configurator: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        if ($job) { Remove-Job $job -Force }
+    }
+
+    if (-not $scriptSuccessfullyCompleted) {
+        if ($lastLine) {
+            if ($lastLine -imatch 'completed') {
+                 Write-Host "`nFinal status from configurator: $lastLine" -ForegroundColor Green
+            } else {
+                 Write-Host "`nFinal status from configurator: $lastLine" -ForegroundColor Red
+            }
+        } else {
+            Write-Host "`nScript finished with errors during configuration." -ForegroundColor Red
+        }
     }
 }
 
-# --- 5. Final Tweak of openmw.cfg ---
-Write-Host "`nPerforming final tweak on openmw.cfg..." -ForegroundColor Cyan
-$cfgPath = Join-Path -Path $OutputDirectory -ChildPath "openmw.cfg"
-$lineToMove = "content=LuaMultiMark.omwaddon"
-$targetLine = "content=AttendMe.omwscripts"
+# --- 7. Final Tweak of openmw.cfg ---
+if ($scriptSuccessfullyCompleted) {
+    Write-Host "`nPerforming final tweak on openmw.cfg..." -ForegroundColor Cyan
+    $cfgPath = Join-Path -Path $OutputDirectory -ChildPath "openmw.cfg"
+    $lineToMove = "content=LuaMultiMark.omwaddon"
+    $targetLine = "content=AttendMe.omwscripts"
 
-try {
-    if (-not (Test-Path $cfgPath)) { throw "openmw.cfg not found at $cfgPath" }
+    try {
+        if (-not (Test-Path $cfgPath)) { throw "openmw.cfg not found at $cfgPath" }
 
-    $cfgContentArray = @(Get-Content -Path $cfgPath)
-    $cfgContentList = [System.Collections.Generic.List[string]]::new()
-    foreach ($line in $cfgContentArray) { $cfgContentList.Add($line) }
+        $cfgContentArray = @(Get-Content -Path $cfgPath)
+        $cfgContentList = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in $cfgContentArray) { $cfgContentList.Add($line) }
 
-    if ($cfgContentList.Contains($lineToMove) -and $cfgContentList.Contains($targetLine)) {
-        [void]$cfgContentList.Remove($lineToMove)
-        $targetIndex = $cfgContentList.IndexOf($targetLine)
-        $cfgContentList.Insert($targetIndex, $lineToMove)
-        Set-Content -Path $cfgPath -Value $cfgContentList
-        Write-Host "Successfully moved '$lineToMove' in openmw.cfg." -ForegroundColor Green
-    } else {
-        $targetIndex = $cfgContentList.IndexOf($targetLine)
-        if ($targetIndex -ge 0) {
+        if ($cfgContentList.Contains($lineToMove) -and $cfgContentList.Contains($targetLine)) {
+            [void]$cfgContentList.Remove($lineToMove)
+            $targetIndex = $cfgContentList.IndexOf($targetLine)
             $cfgContentList.Insert($targetIndex, $lineToMove)
             Set-Content -Path $cfgPath -Value $cfgContentList
-            Write-Host "Added '$lineToMove' to openmw.cfg as it was missing." -ForegroundColor Green
+            Write-Host "Successfully moved '$lineToMove' in openmw.cfg." -ForegroundColor Green
         } else {
-            Write-Host "Could not find target line '$targetLine' in openmw.cfg. Skipping tweak." -ForegroundColor Yellow
+            $targetIndex = $cfgContentList.IndexOf($targetLine)
+            if ($targetIndex -ge 0) {
+                $cfgContentList.Insert($targetIndex, $lineToMove)
+                Set-Content -Path $cfgPath -Value $cfgContentList
+                Write-Host "Added '$lineToMove' to openmw.cfg as it was missing." -ForegroundColor Green
+            } else {
+                Write-Host "Could not find target line '$targetLine' in openmw.cfg. Skipping tweak." -ForegroundColor Yellow
+            }
         }
     }
+    catch {
+        $scriptSuccessfullyCompleted = $false
+        Write-Host "An error occurred during the openmw.cfg tweak: $($_.Exception.Message)" -ForegroundColor Red
+    }
 }
-catch {
-    Write-Host "An error occurred during the openmw.cfg tweak: $($_.Exception.Message)" -ForegroundColor Red
+
+# --- 8. Conditional GitHub Backup ---
+if ($scriptSuccessfullyCompleted) {
+    Write-Host "`nChecking conditions for GitHub backup..." -ForegroundColor Cyan
+    
+    $timeThreshold = New-TimeSpan -Hours 24
+    $triggerUpload = $false
+    $reason = ""
+
+    if ($contentHasChanged) {
+        $triggerUpload = $true
+        $reason = "Script content has changed since last backup."
+    }
+    elseif ($timeSinceLastBackup -and ($timeSinceLastBackup -gt $timeThreshold)) {
+        $triggerUpload = $true
+        $reason = "Daily backup triggered (last backup was $($timeSinceLastBackup.Days)d, $($timeSinceLastBackup.Hours)h ago)."
+    }
+
+    if ($triggerUpload) {
+        Write-Host "  Upload condition met: $reason" -ForegroundColor Green
+        Write-Host "  Calling GitHub save script..." -ForegroundColor Cyan
+        
+        $githubScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "save-to-git.ps1"
+        if (Test-Path $githubScriptPath) {
+            & $githubScriptPath
+        } else {
+            Write-Warning "GitHub save script not found at '$githubScriptPath'. Skipping save."
+        }
+
+    } else {
+        Write-Host "  Upload conditions not met (no changes and not enough time elapsed). Skipping GitHub backup." -ForegroundColor Gray
+    }
+} else {
+    Write-Host "`nSkipping GitHub backup due to errors encountered during script execution." -ForegroundColor Yellow
 }
 
 Write-Host "`nAll steps completed!" -ForegroundColor Green
