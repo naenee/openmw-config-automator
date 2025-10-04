@@ -10,7 +10,7 @@
     03. Sanitizes top-level folder names in the mod directory.
     04. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
     05. Saves choices to individual files for persistence.
-    06. Reads a custom exclusion file ('exclusions\removedata.txt') to generate a 'removeData' block.
+    06. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
     07. Generates the momw-customizations.toml file with correct formatting.
     08. Manages backups of the previous customization file and old log files.
     09. Runs the MOMW configurator with a native PowerShell progress bar.
@@ -369,20 +369,36 @@ if ($modFilenames.Count -gt 0) {
 
 Write-Host "`nGenerating TOML content..." -ForegroundColor Cyan
 
-# --- Read and format exclusions for the removeData block ---
+# --- Read and format exclusions for the removeData and removeContent blocks ---
 $removeDataBlock = ""
+$removeContentBlock = ""
 if ($ExclusionsDirectoryPath) {
-    $exclusionFilePath = Join-Path -Path $ExclusionsDirectoryPath -ChildPath "removedata.txt"
-    if (Test-Path $exclusionFilePath) {
-        $exclusionLines = Get-Content -Path $exclusionFilePath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $removeDataFilePath = Join-Path -Path $ExclusionsDirectoryPath -ChildPath "removedata.txt"
+    if (Test-Path $removeDataFilePath) {
+        $exclusionLines = Get-Content -Path $removeDataFilePath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         if ($exclusionLines.Count -gt 0) {
-            Write-Host "  Found $($exclusionLines.Count) exclusion(s) in 'removedata.txt'." -ForegroundColor Green
+            Write-Host "  Found $($exclusionLines.Count) data exclusion(s)." -ForegroundColor Green
             # Correctly format each line as a quoted string for the TOML array, escaping backslashes.
             $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "' + ($_ -replace '\\', '\\') + '"' }
             $removeDataContent = $formattedExclusionLines -join ",`n"
             $removeDataBlock = @"
 removeData = [
 $removeDataContent
+]
+"@
+        }
+    }
+    
+    $removeContentFilePath = Join-Path -Path $ExclusionsDirectoryPath -ChildPath "removecontent.txt"
+    if (Test-Path $removeContentFilePath) {
+        $exclusionLines = Get-Content -Path $removeContentFilePath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        if ($exclusionLines.Count -gt 0) {
+            Write-Host "  Found $($exclusionLines.Count) content exclusion(s)." -ForegroundColor Green
+            $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "' + $_ + '"' }
+            $removeContentContent = $formattedExclusionLines -join ",`n"
+            $removeContentBlock = @"
+removeContent = [
+$removeContentContent
 ]
 "@
         }
@@ -397,6 +413,7 @@ $tomlContent = @"
 listName = "expanded-vanilla"
 removeFallback = ["Movies_Company_Logo,bethesda logo.bik", "Movies_Morrowind_Logo,mw_logo.bik"]
 $removeDataBlock
+$removeContentBlock
 [[Customizations.insert]]
 insertBlock = """
 $pathsBlock
