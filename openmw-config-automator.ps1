@@ -5,15 +5,15 @@
 
 .DESCRIPTION
     This script provides a full end-to-end automation for a custom mod folder.
-    1. Backs up itself, adding a header with the date and number of lines changed.
-    2. Clears the console and starts a log file in a dedicated working directory.
-    3. Sanitizes top-level folder names in the mod directory.
-    4. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
-    5. Saves choices to individual files for persistence.
-    6. Generates the momw-customizations.toml file.
-    7. Manages backups of the previous customization file.
-    8. Runs the MOMW configurator with a native PowerShell progress bar.
-    9. Rearranges a specific line within the final openmw.cfg for load order optimization.
+    01. Backs up itself, adding a header with the date and number of lines changed.
+    02. Clears the console and starts a log file in a dedicated working directory.
+    03. Sanitizes top-level folder names in the mod directory.
+    04. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
+    05. Saves choices to individual files for persistence.
+    06. Generates the momw-customizations.toml file.
+    07. Manages backups of the previous customization file.
+    08. Runs the MOMW configurator with a native PowerShell progress bar.
+    09. Rearranges a specific line within the final openmw.cfg for load order optimization.
     10. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
 #>
 
@@ -24,8 +24,8 @@ Clear-Host
 # The root directory to search for your mods.
 $ModRootDirectory = "D:\modding\Morrowind\custom"
 
-# The directory where the tool executables are located.
-$ToolsDirectory = "D:\modding\Morrowind\momw-tools-pack"
+# The relative path for the tool executables.
+$ToolsDirectory = "..\momw-tools-pack"
 
 # The relative path for logs and saved choices.
 $WorkingDirectory = "..\openmw-config-automator.working"
@@ -392,7 +392,10 @@ if ($scriptSuccessfullyCompleted) {
 
     $lastLine = ""
     try {
-        $configuratorPath = Join-Path -Path $ToolsDirectory -ChildPath "momw-configurator.exe"
+        $resolvedToolsPath = if ($PSScriptRoot) { Resolve-Path (Join-Path $PSScriptRoot $ToolsDirectory) } else { $ToolsDirectory }
+        $configuratorPath = Join-Path -Path $resolvedToolsPath -ChildPath "momw-configurator.exe"
+        if (-not (Test-Path $configuratorPath)) { throw "momw-configurator.exe not found at the expected location: $configuratorPath" }
+
         $job = Start-Job -ScriptBlock { & $using:configuratorPath config expanded-vanilla --verbose 2>&1 }
         
         $spinner = '|', '/', '-', '\'
