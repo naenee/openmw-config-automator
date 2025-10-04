@@ -7,14 +7,17 @@ This master script is an automaton that orchestrates your alterations with tirel
 When its incantation is uttered, it performs the following rites:
 
 Cleansing and Scrying:
+
 It first cleanses your alteration-containers (mod folders) of improper symbols.
 It then scries their contents, navigating complex structures and consulting your will when faced with multiple paths (such as FOMOD installers).
 
 Scribing and Forging:
+
 Your choices are scribed to memory scrolls (the mod_choices folder) for future use.
 Once your will is known, it forges a master decree (momw-customizations.toml) and commands a lesser golem (momw-configurator) to enact it upon the openmw.cfg.
 
 The Final Ordering:
+
 As a final touch, it ensures specific incantations (like content=LuaMultiMark.omwaddon) are placed in their proper sequence within the openmw.cfg.
 The Second Scroll: The Aetherial Scribe(save-to-git.ps1)This lesser scroll is a loyal scribe, tasked with preserving the masterwork in the Aetherial Archive (your GitHub repository).
 The scribe is summoned only when wisdom deems it necessary: upon significant alteration to the master scroll, or upon the passing of a day, ensuring no great work is ever lost.
@@ -22,6 +25,7 @@ The scribe is summoned only when wisdom deems it necessary: upon significant alt
 The Rites of Invocation
 
 A note to fellow enchanters:
+
 These scrolls were scribed for the author's personal sanctum. The inscribed paths reflect that domain and may require alteration to function within your own.
 To command these powerful tools, you must observe the proper rites:
 
