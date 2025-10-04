@@ -377,8 +377,8 @@ if ($ExclusionsDirectoryPath) {
         $exclusionLines = Get-Content -Path $exclusionFilePath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         if ($exclusionLines.Count -gt 0) {
             Write-Host "  Found $($exclusionLines.Count) exclusion(s) in 'removedata.txt'." -ForegroundColor Green
-            # Correctly format each line as a quoted string for the TOML array
-            $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "' + $_ + '"' }
+            # Correctly format each line as a quoted string for the TOML array, escaping backslashes.
+            $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "' + ($_ -replace '\\', '\\') + '"' }
             $removeDataContent = $formattedExclusionLines -join ",`n"
             $removeDataBlock = @"
 removeData = [
