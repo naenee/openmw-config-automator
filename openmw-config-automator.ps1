@@ -10,11 +10,12 @@
     03. Sanitizes top-level folder names in the mod directory.
     04. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
     05. Saves choices to individual files for persistence.
-    06. Generates the momw-customizations.toml file.
-    07. Manages backups of the previous customization file and old log files.
-    08. Runs the MOMW configurator with a native PowerShell progress bar.
-    09. Rearranges a specific line within the final openmw.cfg for load order optimization.
-    10. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
+    06. Reads a custom exclusion file ('exclusions\removedata.txt') to generate a 'removeData' block.
+    07. Generates the momw-customizations.toml file.
+    08. Manages backups of the previous customization file and old log files.
+    09. Runs the MOMW configurator with a native PowerShell progress bar.
+    10. Rearranges a specific line within the final openmw.cfg for load order optimization.
+    11. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
 
 .NOTES
     This is a personal script, tailored for a specific workflow. It is provided as-is
@@ -181,6 +182,7 @@ if (-not (Test-Path $OutputDirectory -PathType Container)) {
 Write-Host "`nScanning for mods in: $ModRootDirectory" -ForegroundColor Cyan
 
 $ChoicesDirectoryPath = $null
+$ExclusionsDirectoryPath = $null
 if ($ResolvedWorkingDirectory) {
     $ChoicesDirectoryPath = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "mod_choices"
     if (-not (Test-Path $ChoicesDirectoryPath)) {
@@ -188,6 +190,12 @@ if ($ResolvedWorkingDirectory) {
         New-Item -ItemType Directory -Path $ChoicesDirectoryPath | Out-Null
     } else {
         Write-Host "Loading choices from: $ChoicesDirectoryPath" -ForegroundColor DarkGray
+    }
+
+    $ExclusionsDirectoryPath = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "exclusions"
+    if (-not (Test-Path $ExclusionsDirectoryPath)) {
+        Write-Host "Creating new exclusions directory at: $ExclusionsDirectoryPath" -ForegroundColor DarkGray
+        New-Item -ItemType Directory -Path $ExclusionsDirectoryPath | Out-Null
     }
 }
 
@@ -361,6 +369,25 @@ if ($modFilenames.Count -gt 0) {
 
 Write-Host "`nGenerating TOML content..." -ForegroundColor Cyan
 
+# --- Read and format exclusions for the removeData block ---
+$removeDataBlock = ""
+if ($ExclusionsDirectoryPath) {
+    $exclusionFilePath = Join-Path -Path $ExclusionsDirectoryPath -ChildPath "removedata.txt"
+    if (Test-Path $exclusionFilePath) {
+        $exclusionLines = Get-Content -Path $exclusionFilePath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        if ($exclusionLines.Count -gt 0) {
+            Write-Host "  Found $($exclusionLines.Count) exclusion(s) in 'removedata.txt'." -ForegroundColor Green
+            $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "data=' + ($_ -replace '\\', '\\') + '"' }
+            $removeDataContent = $formattedExclusionLines -join ",`n"
+            $removeDataBlock = @"
+removeData = [
+$removeDataContent
+]
+"@
+        }
+    }
+}
+
 $pathsBlock = $formattedModPaths -join "`n"
 $filesBlock = $modFilenames -join "`n"
 
@@ -368,6 +395,7 @@ $tomlContent = @"
 [[Customizations]]
 listName = "expanded-vanilla"
 removeFallback = ["Movies_Company_Logo,bethesda logo.bik", "Movies_Morrowind_Logo,mw_logo.bik"]
+$removeDataBlock
 [[Customizations.insert]]
 insertBlock = """
 $pathsBlock
@@ -557,3 +585,4 @@ Write-Host "`nAll steps completed!" -ForegroundColor Green
 if ($global:Transcript) {
     Stop-Transcript
 }
+
