@@ -1,4 +1,4 @@
-Tome of the Automaton Enchante
+Tome of the Automaton Enchanter
 
 Found among the effects of a traveling Telvanni master, this text describes two powerful scripts of Dwemer-like artifice, designed to bring order to the chaos of a thousand-and-one alterations
 
