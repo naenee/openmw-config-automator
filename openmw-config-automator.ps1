@@ -7,15 +7,16 @@
     This script provides a full end-to-end automation for a custom mod folder.
     01. Backs up itself, adding a header with the date and number of lines changed.
     02. Clears the console and starts a new, uniquely named log file for each run.
-    03. Sanitizes top-level folder names in the mod directory.
-    04. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
-    05. Saves choices to individual files for persistence.
-    06. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
-    07. Generates the momw-customizations.toml file with correct formatting.
-    08. Manages backups of the previous customization file and old log files.
-    09. Runs the MOMW configurator with a native PowerShell progress bar.
-    10. Rearranges a specific line within the final openmw.cfg for load order optimization.
-    11. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
+    03. Organizes and cleans up external config backups (openmw.cfg, settings.cfg, etc.).
+    04. Sanitizes top-level folder names in the mod directory.
+    05. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
+    06. Saves choices to individual files for persistence.
+    07. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
+    08. Generates the momw-customizations.toml file with correct formatting.
+    09. Manages backups of the previous customization file and old log files.
+    10. Runs the MOMW configurator with a native PowerShell progress bar.
+    11. Rearranges a specific line within the final openmw.cfg for load order optimization.
+    12. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
 
 .NOTES
     This is a personal script, tailored for a specific workflow. It is provided as-is
@@ -145,8 +146,69 @@ if ($ResolvedWorkingDirectory) {
     Write-Host "Logging output to: $newLogFileName" -ForegroundColor DarkGray
 }
 
+# --- 4. Organize External Backups ---
+Write-Host "`nOrganizing external OpenMW backups..." -ForegroundColor Cyan
 
-# --- 4. Sanitize Top-Level Folder Names ---
+if ($ResolvedWorkingDirectory) {
+    $cfgBackupDir = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "cfg_backups"
+    if (-not (Test-Path $cfgBackupDir)) {
+        New-Item -ItemType Directory -Path $cfgBackupDir | Out-Null
+        Write-Host "  Created backup directory: $cfgBackupDir" -ForegroundColor DarkGray
+    }
+
+    function Move-And-Clean-Backups {
+        param(
+            [string]$SourceDir,
+            [string]$DestDir,
+            [string]$Pattern,
+            [int]$KeepCount
+        )
+        
+        Write-Host "  Processing backups for pattern: $Pattern"
+        
+        # Get all relevant backups from the source directory
+        $sourceBackups = Get-ChildItem -Path $SourceDir -Filter $Pattern | Sort-Object CreationTime -Descending
+        
+        if ($sourceBackups.Count -gt 0) {
+            # Move the newest backups to our archive
+            $backupsToMove = $sourceBackups | Select-Object -First $KeepCount
+            foreach ($backup in $backupsToMove) {
+                Write-Host "    Moving '$($backup.Name)' to backups folder." -ForegroundColor Gray
+                Move-Item -Path $backup.FullName -Destination $DestDir -Force
+            }
+            
+            # Delete any remaining (older) backups from the source directory
+            $remainingOldBackups = Get-ChildItem -Path $SourceDir -Filter $Pattern
+            foreach ($oldBackup in $remainingOldBackups) {
+                Write-Host "    Deleting old backup from source: '$($oldBackup.Name)'" -ForegroundColor Magenta
+                Remove-Item -Path $oldBackup.FullName -Force
+            }
+        }
+        
+        # Final cleanup in the destination directory to enforce the limit
+        $destBackups = Get-ChildItem -Path $DestDir -Filter $Pattern | Sort-Object CreationTime -Descending
+        if ($destBackups.Count -gt $KeepCount) {
+            $destBackupsToDelete = $destBackups | Select-Object -Skip $KeepCount
+            foreach ($backupToDelete in $destBackupsToDelete) {
+                Write-Host "    Pruning oldest backup from archive: '$($backupToDelete.Name)'" -ForegroundColor Magenta
+                Remove-Item -Path $backupToDelete.FullName -Force
+            }
+        }
+    }
+
+    $backupPatterns = @(
+        "openmw.cfg.backup.*",
+        "settings.cfg.backup.*",
+        "shaders.yaml.backup.*"
+    )
+
+    foreach ($pattern in $backupPatterns) {
+        Move-And-Clean-Backups -SourceDir $OutputDirectory -DestDir $cfgBackupDir -Pattern $pattern -KeepCount 7
+    }
+}
+
+
+# --- 5. Sanitize Top-Level Folder Names ---
 Write-Host "`nSanitizing top-level folder names in '$ModRootDirectory'..." -ForegroundColor Cyan
 
 $scriptSuccessfullyCompleted = $true # Assume success until an error occurs
@@ -173,7 +235,7 @@ Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
 }
 
 
-# --- 5. Generate TOML File ---
+# --- 6. Generate TOML File ---
 if (-not (Test-Path $OutputDirectory -PathType Container)) {
     Write-Host "`nOutput directory not found. Creating it: $OutputDirectory" -ForegroundColor Yellow
     New-Item -Path $OutputDirectory -ItemType Directory -Force | Out-Null
@@ -378,7 +440,6 @@ if ($ExclusionsDirectoryPath) {
         $exclusionLines = Get-Content -Path $removeDataFilePath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         if ($exclusionLines.Count -gt 0) {
             Write-Host "  Found $($exclusionLines.Count) data exclusion(s)." -ForegroundColor Green
-            # Correctly format each line as a quoted string for the TOML array, escaping backslashes.
             $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "' + ($_ -replace '\\', '\\') + '"' }
             $removeDataContent = $formattedExclusionLines -join ",`n"
             $removeDataBlock = @"
@@ -456,7 +517,7 @@ catch {
     $scriptSuccessfullyCompleted = $false
 }
 
-# --- 6. Update OpenMW Configuration ---
+# --- 7. Update OpenMW Configuration ---
 if ($scriptSuccessfullyCompleted) {
     Write-Host "`nRunning MOMW Configurator to apply changes..." -ForegroundColor Cyan
 
@@ -525,7 +586,7 @@ if ($scriptSuccessfullyCompleted) {
     }
 }
 
-# --- 7. Final Tweak of openmw.cfg ---
+# --- 8. Final Tweak of openmw.cfg ---
 if ($scriptSuccessfullyCompleted) {
     Write-Host "`nPerforming final tweak on openmw.cfg..." -ForegroundColor Cyan
     $cfgPath = Join-Path -Path $OutputDirectory -ChildPath "openmw.cfg"
@@ -562,7 +623,7 @@ if ($scriptSuccessfullyCompleted) {
     }
 }
 
-# --- 8. Conditional GitHub Backup ---
+# --- 9. Conditional GitHub Backup ---
 if ($scriptSuccessfullyCompleted) {
     Write-Host "`nChecking conditions for GitHub backup..." -ForegroundColor Cyan
     
