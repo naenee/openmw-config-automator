@@ -589,4 +589,3 @@ if ($scriptSuccessfullyCompleted) {
 Write-Host "`nAll steps completed!" -ForegroundColor Green
 
 if ($global:Transcript) { Stop-Transcript }
-
