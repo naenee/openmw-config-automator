@@ -570,17 +570,22 @@ if ($scriptSuccessfullyCompleted -and $customChainValue) {
         }
         
         if ($postProcessingIndex -ne -1) {
+            # Loop backwards to safely remove items while iterating
             for ($i = $settingsContentList.Count - 1; $i -gt $postProcessingIndex; $i--) {
-                if ($settingsContentList[$i].Trim().StartsWith("chain")) {
-                    $settingsContentList.RemoveAt($i)
+                $line = $settingsContentList[$i].Trim()
+                # Stop if we hit the start of the next section
+                if ($line.StartsWith("[")) { break }
+                # Remove ANY line that starts with chain, commenting it out is safer
+                if ($line.StartsWith("chain")) {
+                    $settingsContentList[$i] = "#" + $settingsContentList[$i]
                 }
-                if ($settingsContentList[$i].Trim().StartsWith("[")) { break }
             }
+            # Insert the custom chain at the top of the section
             $settingsContentList.Insert($postProcessingIndex + 1, $customChainValue)
             Set-Content -Path $settingsCfgPath -Value $settingsContentList
             Write-Host "  Successfully restored custom post processing chain." -ForegroundColor Green
         } else {
-            Write-Warning "  Could not find '[Post Processing]' section after running configurator. Custom setting was not restored."
+            Write-Warning "  Could not find '[Post Processing]' section. Custom setting was not restored."
         }
     }
     catch {
