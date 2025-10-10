@@ -6,7 +6,7 @@
 .DESCRIPTION
     This script provides a full end-to-end automation for a custom mod folder.
     01. Backs up itself, adding a header with the date and number of lines changed.
-    02. Clears the console and starts a new, uniquely named log file for each run.
+    02. Clears the console and starts a new, uniquely named log file in a dedicated 'log' folder.
     03. On first run, prompts for the mod directory path and saves it to a config file.
     04. Organizes and cleans up external config backups (openmw.cfg, settings.cfg, etc.).
     05. Sanitizes top-level folder names in the mod directory.
@@ -555,12 +555,12 @@ if ($scriptSuccessfullyCompleted) {
 if ($scriptSuccessfullyCompleted -and $customChainValue) {
     Write-Host "`nRestoring custom post processing chain..." -ForegroundColor Cyan
     try {
-        $settingsContentList = [System.Collections.Generic.List[string]]::new()
         $settingsContentArray = @(Get-Content -Path $settingsCfgPath)
-        foreach($line in $settingsContentArray){
+        $settingsContentList = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in $settingsContentArray) {
             $settingsContentList.Add($line)
         }
-        
+
         $postProcessingIndex = -1
         for ($i = 0; $i -lt $settingsContentList.Count; $i++) {
             if ($settingsContentList[$i].Trim() -eq "[Post Processing]") {
@@ -570,16 +570,22 @@ if ($scriptSuccessfullyCompleted -and $customChainValue) {
         }
         
         if ($postProcessingIndex -ne -1) {
-            # Loop backwards to safely remove items while iterating
-            for ($i = $settingsContentList.Count - 1; $i -gt $postProcessingIndex; $i--) {
-                $line = $settingsContentList[$i].Trim()
-                # Stop if we hit the start of the next section
-                if ($line.StartsWith("[")) { break }
-                # Remove ANY line that starts with chain, commenting it out is safer
-                if ($line.StartsWith("chain")) {
+            # Find the end of the section
+            $sectionEndIndex = $settingsContentList.Count
+            for ($i = $postProcessingIndex + 1; $i -lt $settingsContentList.Count; $i++) {
+                if ($settingsContentList[$i].Trim().StartsWith("[")) {
+                    $sectionEndIndex = $i
+                    break
+                }
+            }
+            
+            # Comment out any existing "chain" lines within the section
+            for ($i = $postProcessingIndex + 1; $i -lt $sectionEndIndex; $i++) {
+                if ($settingsContentList[$i].Trim().StartsWith("chain")) {
                     $settingsContentList[$i] = "#" + $settingsContentList[$i]
                 }
             }
+            
             # Insert the custom chain at the top of the section
             $settingsContentList.Insert($postProcessingIndex + 1, $customChainValue)
             Set-Content -Path $settingsCfgPath -Value $settingsContentList
@@ -657,3 +663,4 @@ if ($scriptSuccessfullyCompleted) {
 Write-Host "`nAll steps completed!" -ForegroundColor Green
 
 if ($global:Transcript) { Stop-Transcript }
+
