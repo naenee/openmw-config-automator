@@ -1,3 +1,7 @@
+<# .VERSION_INFO
+    Backup Date: 2025-10-10 09:17:49
+    Lines Changed Since Last Backup: 30
+#>
 <#
 .SYNOPSIS
     Performs a self-backup, cleans mod folder names, interactively handles nested mod options,
@@ -663,4 +667,5 @@ if ($scriptSuccessfullyCompleted) {
 Write-Host "`nAll steps completed!" -ForegroundColor Green
 
 if ($global:Transcript) { Stop-Transcript }
+
 
