@@ -6,18 +6,20 @@
 .DESCRIPTION
     This script provides a full end-to-end automation for a custom mod folder.
     01. Backs up itself, adding a header with the date and number of lines changed.
-    02. Clears the console and starts a new, uniquely named log file in a dedicated 'log' folder.
+    02. Clears the console and starts a new, uniquely named log file for each run.
     03. On first run, prompts for the mod directory path and saves it to a config file.
     04. Organizes and cleans up external config backups (openmw.cfg, settings.cfg, etc.).
     05. Sanitizes top-level folder names in the mod directory.
-    06. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
-    07. Saves choices to individual files for persistence.
-    08. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
-    09. Generates the momw-customizations.toml file with correct formatting.
-    10. Manages backups of the previous customization file and old log files.
-    11. Runs the MOMW configurator with a native PowerShell progress bar.
-    12. Rearranges a specific line within the final openmw.cfg for load order optimization.
-    13. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
+    06. Preserves custom post-processing settings from settings.cfg.
+    07. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
+    08. Saves choices to individual files for persistence.
+    09. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
+    10. Generates the momw-customizations.toml file with correct formatting.
+    11. Manages backups of the previous customization file and old log files.
+    12. Runs the MOMW configurator with a native PowerShell progress bar.
+    13. Restores custom post-processing settings to settings.cfg.
+    14. Rearranges a specific line within the final openmw.cfg for load order optimization.
+    15. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
 
 .NOTES
     This is a personal script, tailored for a specific workflow. It is provided as-is
@@ -49,7 +51,7 @@ $LogVersionsToKeep = 7
 
 # --- Script Body ---
 
-# --- 1. Resolve Working Directory ---
+# --- 01. Resolve Working Directory ---
 $ResolvedWorkingDirectory = $null
 if ($PSScriptRoot) {
     $ResolvedWorkingDirectory = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath $WorkingDirectory)
@@ -62,7 +64,7 @@ if ($PSScriptRoot) {
 }
 
 
-# --- 2. Self-Backup and Versioning ---
+# --- 02. Self-Backup and Versioning ---
 Write-Host "Performing self-backup and versioning..." -ForegroundColor Cyan
 
 $thisScriptPath = $MyInvocation.MyCommand.Path
@@ -120,14 +122,13 @@ if ($ResolvedWorkingDirectory) {
 }
 
 
-# --- 3. Setup Logging ---
+# --- 03. Setup Logging ---
 if ($ResolvedWorkingDirectory) {
     $logDir = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "log"
     if (-not (Test-Path $logDir)) {
         New-Item -ItemType Directory -Path $logDir | Out-Null
     }
 
-    # Manage old logs, keeping the configured number of recent logs
     $logPattern = "openmw-config-automator-*.log"
     $allLogs = Get-ChildItem -Path $logDir -Filter $logPattern | Sort-Object CreationTime -Descending
     
@@ -139,17 +140,15 @@ if ($ResolvedWorkingDirectory) {
         }
     }
 
-    # Create a new, unique log file name for this run
     $timestamp = Get-Date -Format "yyyyMMddHHmmss"
     $newLogFileName = "openmw-config-automator-$timestamp.log"
     $LogFilePath = Join-Path -Path $logDir -ChildPath $newLogFileName
     
-    # Start the transcript with the new, unique file
     Start-Transcript -Path $LogFilePath
     Write-Host "Logging output to: $($newLogFileName)" -ForegroundColor DarkGray
 }
 
-# --- 4. Load or Prompt for ModRootDirectory ---
+# --- 04. Load or Prompt for ModRootDirectory ---
 $ModRootDirectory = $null
 $configFilePath = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "config.json"
 
@@ -175,7 +174,7 @@ while (-not $ModRootDirectory) {
     }
 }
 
-# --- 5. Organize External Backups ---
+# --- 05. Organize External Backups ---
 Write-Host "`nOrganizing external OpenMW backups..." -ForegroundColor Cyan
 
 if ($ResolvedWorkingDirectory) {
@@ -217,7 +216,7 @@ if ($ResolvedWorkingDirectory) {
 }
 
 
-# --- 6. Sanitize Top-Level Folder Names ---
+# --- 06. Sanitize Top-Level Folder Names ---
 Write-Host "`nSanitizing top-level folder names in '$ModRootDirectory'..." -ForegroundColor Cyan
 
 $scriptSuccessfullyCompleted = $true # Assume success until an error occurs
@@ -237,7 +236,35 @@ Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
     }
 }
 
-# --- 7. Scan and Generate TOML File ---
+# --- 07. Preserve Custom Post Processing Chain ---
+Write-Host "`nChecking for custom post processing chain in settings.cfg..." -ForegroundColor Cyan
+$customChainValue = $null
+$settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
+$defaultChain = "ssao_hq,underwater_interior_effects,underwater_effects,clouds,godrays,bloomlinear,hdr,FollowerAA,war_adjustments"
+
+if (Test-Path $settingsCfgPath) {
+    $settingsContent = Get-Content -Path $settingsCfgPath
+    $inPostProcessingSection = $false
+    foreach ($line in $settingsContent) {
+        if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
+        if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
+        if ($inPostProcessingSection -and $line.Trim().StartsWith("chain")) {
+            $currentChain = ($line -split '=', 2)[1].Trim()
+            if ($currentChain -ne $defaultChain) {
+                $customChainValue = $line # Store the entire original line
+                Write-Host "  Found custom post processing chain. It will be restored after configuration." -ForegroundColor Green
+            } else {
+                Write-Host "  Post processing chain is set to default. No action needed." -ForegroundColor Gray
+            }
+            break
+        }
+    }
+} else {
+    Write-Warning "  settings.cfg not found. Cannot preserve custom post processing chain."
+}
+
+
+# --- 08. Scan and Generate TOML File ---
 Write-Host "`nScanning for mods in: $ModRootDirectory" -ForegroundColor Cyan
 
 $ChoicesDirectoryPath = $null
@@ -525,6 +552,43 @@ if ($scriptSuccessfullyCompleted) {
     }
 }
 
+if ($scriptSuccessfullyCompleted -and $customChainValue) {
+    Write-Host "`nRestoring custom post processing chain..." -ForegroundColor Cyan
+    try {
+        $settingsContentList = [System.Collections.Generic.List[string]]::new()
+        $settingsContentArray = @(Get-Content -Path $settingsCfgPath)
+        foreach($line in $settingsContentArray){
+            $settingsContentList.Add($line)
+        }
+        
+        $postProcessingIndex = -1
+        for ($i = 0; $i -lt $settingsContentList.Count; $i++) {
+            if ($settingsContentList[$i].Trim() -eq "[Post Processing]") {
+                $postProcessingIndex = $i
+                break
+            }
+        }
+        
+        if ($postProcessingIndex -ne -1) {
+            for ($i = $settingsContentList.Count - 1; $i -gt $postProcessingIndex; $i--) {
+                if ($settingsContentList[$i].Trim().StartsWith("chain")) {
+                    $settingsContentList.RemoveAt($i)
+                }
+                if ($settingsContentList[$i].Trim().StartsWith("[")) { break }
+            }
+            $settingsContentList.Insert($postProcessingIndex + 1, $customChainValue)
+            Set-Content -Path $settingsCfgPath -Value $settingsContentList
+            Write-Host "  Successfully restored custom post processing chain." -ForegroundColor Green
+        } else {
+            Write-Warning "  Could not find '[Post Processing]' section after running configurator. Custom setting was not restored."
+        }
+    }
+    catch {
+        Write-Error "An error occurred while restoring the post processing chain: $($_.Exception.Message)"
+        $scriptSuccessfullyCompleted = $false
+    }
+}
+
 if ($scriptSuccessfullyCompleted) {
     Write-Host "`nPerforming final tweak on openmw.cfg..." -ForegroundColor Cyan
     $cfgPath = Join-Path -Path $OutputDirectory -ChildPath "openmw.cfg"
@@ -534,7 +598,6 @@ if ($scriptSuccessfullyCompleted) {
     try {
         if (-not (Test-Path $cfgPath)) { throw "openmw.cfg not found at $cfgPath" }
 
-        # This is the robust method for creating the list that avoids the overload error.
         $cfgContentArray = @(Get-Content -Path $cfgPath)
         $cfgContentList = [System.Collections.Generic.List[string]]::new()
         foreach ($line in $cfgContentArray) {
