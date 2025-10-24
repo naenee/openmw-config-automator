@@ -1,7 +1,3 @@
-<# .VERSION_INFO
-    Backup Date: 2025-10-10 09:17:49
-    Lines Changed Since Last Backup: 30
-#>
 <#
 .SYNOPSIS
     Performs a self-backup, cleans mod folder names, interactively handles nested mod options,
@@ -20,7 +16,7 @@
     09. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
     10. Generates the momw-customizations.toml file with correct formatting.
     11. Manages backups of the previous customization file and old log files.
-    12. Runs the MOMW configurator with a native PowerShell progress bar.
+    12. Runs the MOMW configurator, filtering known warnings (including validator replacement warnings).
     13. Restores custom post-processing settings to settings.cfg.
     14. Rearranges a specific line within the final openmw.cfg for load order optimization.
     15. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
@@ -240,9 +236,9 @@ Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
     }
 }
 
-# --- 07. Preserve Custom Post Processing Chain ---
+# --- 07. Check for Custom Post Processing Chain ---
 Write-Host "`nChecking for custom post processing chain in settings.cfg..." -ForegroundColor Cyan
-$customChainValue = $null
+$isChainCustom = $false
 $settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
 $defaultChain = "ssao_hq,underwater_interior_effects,underwater_effects,clouds,godrays,bloomlinear,hdr,FollowerAA,war_adjustments"
 
@@ -255,8 +251,8 @@ if (Test-Path $settingsCfgPath) {
         if ($inPostProcessingSection -and $line.Trim().StartsWith("chain")) {
             $currentChain = ($line -split '=', 2)[1].Trim()
             if ($currentChain -ne $defaultChain) {
-                $customChainValue = $line # Store the entire original line
-                Write-Host "  Found custom post processing chain. It will be restored after configuration." -ForegroundColor Green
+                $isChainCustom = $true
+                Write-Host "  Found custom post processing chain. Configurator will use '--no-shaders-yaml' switch." -ForegroundColor Green
             } else {
                 Write-Host "  Post processing chain is set to default. No action needed." -ForegroundColor Gray
             }
@@ -264,7 +260,7 @@ if (Test-Path $settingsCfgPath) {
         }
     }
 } else {
-    Write-Warning "  settings.cfg not found. Cannot preserve custom post processing chain."
+    Write-Warning "  settings.cfg not found. Cannot check for custom post processing chain."
 }
 
 
@@ -515,7 +511,13 @@ if ($scriptSuccessfullyCompleted) {
         $configuratorPath = Join-Path -Path $resolvedToolsPath -ChildPath "momw-configurator.exe"
         if (-not (Test-Path $configuratorPath)) { throw "momw-configurator.exe not found at: $configuratorPath" }
 
-        $job = Start-Job -ScriptBlock { & $using:configuratorPath config expanded-vanilla --verbose 2>&1 }
+        $argList = @("config", "--verbose", "--run-validator")
+        if ($isChainCustom) {
+            $argList += "--no-shaders-yaml"
+        }
+        $argList += "expanded-vanilla"
+        
+        $job = Start-Job -ScriptBlock { & $args[0] $args[1] 2>&1 } -ArgumentList @($configuratorPath, $argList)
         
         $spinner = '|', '/', '-', '\'
         $spinnerIndex = 0
@@ -528,18 +530,36 @@ if ($scriptSuccessfullyCompleted) {
         
         $output = Receive-Job $job
         $lastLine = $output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1
-        $ignorePatterns = @('Skipping record of type SCPT', 'could not be loaded due to error: Unexpected Tag: LUAL', 'ignored empty value for key')
+        
+        # Define the strings to ignore in the output
+        $ignorePatterns = @(
+            'Skipping record of type SCPT',
+            'could not be loaded due to error: Unexpected Tag: LUAL',
+            'ignored empty value for key',
+            'Fully replaced paths were configured',
+            'There was an error running OpenMW-Validator',
+            'exit status 1'
+        )
 
         $allWarningsAndErrors = $output | Where-Object { $_ -match 'warning' -or $_ -match 'error' }
+
         $relevantErrorsAndWarnings = $allWarningsAndErrors
         foreach ($pattern in $ignorePatterns) {
             $relevantErrorsAndWarnings = $relevantErrorsAndWarnings | Where-Object { $_ -notmatch $pattern }
         }
 
-        if ($relevantErrorsAndWarnings.Count -gt 0) {
+        if ($job.State -ne 'Completed' -or $relevantErrorsAndWarnings.Count -gt 0) {
             $scriptSuccessfullyCompleted = $false
             Write-Host "MOMW Configurator completed with relevant warnings or errors:" -ForegroundColor Red
-            $relevantErrorsAndWarnings | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+            
+            # Show all output if there was a real error
+            Write-Host "Displaying full output from configurator:" -ForegroundColor Gray
+            $output | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
+
+            if ($relevantErrorsAndWarnings.Count -gt 0) {
+                Write-Host "Relevant errors/warnings found:" -ForegroundColor Red
+                $relevantErrorsAndWarnings | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+            }
         } else { Write-Host "Configuration applied successfully (all benign issues filtered out)." -ForegroundColor Green }
     }
     catch {
@@ -553,54 +573,6 @@ if ($scriptSuccessfullyCompleted) {
             if ($lastLine -imatch 'completed') { Write-Host "`nFinal status from configurator: $lastLine" -ForegroundColor Green }
             else { Write-Host "`nFinal status from configurator: $lastLine" -ForegroundColor Red }
         } else { Write-Host "`nScript finished with errors during configuration." -ForegroundColor Red }
-    }
-}
-
-if ($scriptSuccessfullyCompleted -and $customChainValue) {
-    Write-Host "`nRestoring custom post processing chain..." -ForegroundColor Cyan
-    try {
-        $settingsContentArray = @(Get-Content -Path $settingsCfgPath)
-        $settingsContentList = [System.Collections.Generic.List[string]]::new()
-        foreach ($line in $settingsContentArray) {
-            $settingsContentList.Add($line)
-        }
-
-        $postProcessingIndex = -1
-        for ($i = 0; $i -lt $settingsContentList.Count; $i++) {
-            if ($settingsContentList[$i].Trim() -eq "[Post Processing]") {
-                $postProcessingIndex = $i
-                break
-            }
-        }
-        
-        if ($postProcessingIndex -ne -1) {
-            # Find the end of the section
-            $sectionEndIndex = $settingsContentList.Count
-            for ($i = $postProcessingIndex + 1; $i -lt $settingsContentList.Count; $i++) {
-                if ($settingsContentList[$i].Trim().StartsWith("[")) {
-                    $sectionEndIndex = $i
-                    break
-                }
-            }
-            
-            # Comment out any existing "chain" lines within the section
-            for ($i = $postProcessingIndex + 1; $i -lt $sectionEndIndex; $i++) {
-                if ($settingsContentList[$i].Trim().StartsWith("chain")) {
-                    $settingsContentList[$i] = "#" + $settingsContentList[$i]
-                }
-            }
-            
-            # Insert the custom chain at the top of the section
-            $settingsContentList.Insert($postProcessingIndex + 1, $customChainValue)
-            Set-Content -Path $settingsCfgPath -Value $settingsContentList
-            Write-Host "  Successfully restored custom post processing chain." -ForegroundColor Green
-        } else {
-            Write-Warning "  Could not find '[Post Processing]' section. Custom setting was not restored."
-        }
-    }
-    catch {
-        Write-Error "An error occurred while restoring the post processing chain: $($_.Exception.Message)"
-        $scriptSuccessfullyCompleted = $false
     }
 }
 
@@ -667,5 +639,4 @@ if ($scriptSuccessfullyCompleted) {
 Write-Host "`nAll steps completed!" -ForegroundColor Green
 
 if ($global:Transcript) { Stop-Transcript }
-
 
