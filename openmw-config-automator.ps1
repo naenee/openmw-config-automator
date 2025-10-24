@@ -10,14 +10,14 @@
     03. On first run, prompts for the mod directory path and saves it to a config file.
     04. Organizes and cleans up external config backups (openmw.cfg, settings.cfg, etc.).
     05. Sanitizes top-level folder names in the mod directory.
-    06. Preserves custom post-processing settings from settings.cfg.
-    07. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
-    08. Saves choices to individual files for persistence.
-    09. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
-    10. Generates the momw-customizations.toml file with correct formatting.
-    11. Manages backups of the previous customization file and old log files.
+    06. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
+    07. Saves choices to individual files for persistence.
+    08. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
+    09. Generates the momw-customizations.toml file with correct formatting.
+    10. Manages backups of the previous customization file and old log files.
+    11. Saves the current post-processing shader chain from settings.cfg.
     12. Runs the MOMW configurator, filtering known warnings (including validator replacement warnings).
-    13. Restores custom post-processing settings to settings.cfg.
+    13. Restores the saved post-processing shader chain to settings.cfg.
     14. Rearranges a specific line within the final openmw.cfg for load order optimization.
     15. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
 
@@ -136,7 +136,8 @@ if ($ResolvedWorkingDirectory) {
         $logsToDelete = $allLogs | Select-Object -Skip ($LogVersionsToKeep - 1)
         foreach ($log in $logsToDelete) {
             Write-Host "  Removing old log: $($log.Name)" -ForegroundColor Magenta
-            Remove-Item -Path $log.FullName -Force
+            # --- FIX --- Suppress errors if the log file is still in use
+            Remove-Item -Path $log.FullName -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -236,45 +237,7 @@ Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
     }
 }
 
-# --- 07. Check for Custom Post Processing Chain ---
-Write-Host "`nChecking for custom post processing chain in settings.cfg..." -ForegroundColor Cyan
-$isChainCustom = $false
-$settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
-$defaultChain = "ssao_hq,underwater_interior_effects,underwater_effects,clouds,godrays,bloomlinear,hdr,FollowerAA,war_adjustments"
-
-if (Test-Path $settingsCfgPath) {
-    $settingsContent = Get-Content -Path $settingsCfgPath
-    $inPostProcessingSection = $false
-    foreach ($line in $settingsContent) {
-        if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
-        if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
-        
-        # --- START FIX ---
-        # Use case-insensitive match (-imatch) and check for 'chain' followed by an equals sign.
-        if ($inPostProcessingSection -and $line.Trim() -imatch '^\s*chain\s*=') {
-            
-            # Split the line at the first equals sign
-            $valuePart = ($line -split '=', 2)[1]
-            
-            # Split the value part at the first comment marker '#' and take the first part
-            $currentChain = ($valuePart -split '#', 2)[0].Trim() 
-            # --- END FIX ---
-
-            if ($currentChain -ne $defaultChain) {
-                $isChainCustom = $true
-                Write-Host "  Found custom post processing chain. Configurator will use '--no-shaders-yaml' switch." -ForegroundColor Green
-            } else {
-                Write-Host "  Post processing chain is set to default. No action needed." -ForegroundColor Gray
-            }
-            break
-        }
-    }
-} else {
-    Write-Warning "  settings.cfg not found. Cannot check for custom post processing chain."
-}
-
-
-# --- 08. Scan and Generate TOML File ---
+# --- 07. Scan and Generate TOML File ---
 Write-Host "`nScanning for mods in: $ModRootDirectory" -ForegroundColor Cyan
 
 $ChoicesDirectoryPath = $null
@@ -513,6 +476,34 @@ catch {
     $scriptSuccessfullyCompleted = $false
 }
 
+# --- 08. Save Custom Post Processing Chain ---
+Write-Host "`nSaving post processing chain from settings.cfg..." -ForegroundColor Cyan
+$savedShaderChainLine = $null
+$settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
+$chainFound = $false
+
+if (Test-Path $settingsCfgPath) {
+    $settingsContent = Get-Content -Path $settingsCfgPath
+    $inPostProcessingSection = $false
+    foreach ($line in $settingsContent) {
+        if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
+        if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
+        
+        if ($inPostProcessingSection -and $line.Trim() -imatch '^\s*chain\s*=') {
+            $savedShaderChainLine = $line # Save the *entire* original line
+            $chainFound = $true
+            Write-Host "  Successfully saved chain: $savedShaderChainLine" -ForegroundColor Green
+            break
+        }
+    }
+    if (-not $chainFound) {
+        Write-Host "  No 'chain' found in [Post Processing] section. Nothing to save." -ForegroundColor Gray
+    }
+} else {
+    Write-Warning "  settings.cfg not found. Cannot save post processing chain."
+}
+
+# --- 09. Run MOMW Configurator ---
 if ($scriptSuccessfullyCompleted) {
     Write-Host "`nRunning MOMW Configurator to apply changes..." -ForegroundColor Cyan
     $lastLine = ""
@@ -521,11 +512,7 @@ if ($scriptSuccessfullyCompleted) {
         $configuratorPath = Join-Path -Path $resolvedToolsPath -ChildPath "momw-configurator.exe"
         if (-not (Test-Path $configuratorPath)) { throw "momw-configurator.exe not found at: $configuratorPath" }
 
-        $argList = @("config", "--verbose", "--run-validator")
-        if ($isChainCustom) {
-            $argList += "--no-shaders-yaml"
-        }
-        $argList += "expanded-vanilla"
+        $argList = @("config", "--verbose", "--run-validator", "expanded-vanilla")
         
         $job = Start-Job -ScriptBlock { & $args[0] $args[1] 2>&1 } -ArgumentList @($configuratorPath, $argList)
         
@@ -578,6 +565,44 @@ if ($scriptSuccessfullyCompleted) {
     }
     finally { if ($job) { Remove-Job $job -Force } }
 
+    # --- 10. Restore Custom Post Processing Chain ---
+    if ($scriptSuccessfullyCompleted -and $savedShaderChainLine) {
+        Write-Host "`nRestoring post processing chain to settings.cfg..." -ForegroundColor Cyan
+        try {
+            if (-not (Test-Path $settingsCfgPath)) { throw "settings.cfg not found at $settingsCfgPath" }
+
+            $settingsContent = Get-Content -Path $settingsCfgPath
+            $newSettingsContent = [System.Collections.Generic.List[string]]::new()
+            $inPostProcessingSection = $false
+            $chainRestored = $false
+
+            foreach ($line in $settingsContent) {
+                if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true }
+                if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false }
+                
+                if ($inPostProcessingSection -and $line.Trim() -imatch '^\s*chain\s*=' -and -not $chainRestored) {
+                    $newSettingsContent.Add($savedShaderChainLine) # Add our saved line
+                    $chainRestored = $true
+                    Write-Host "  Successfully restored chain." -ForegroundColor Green
+                } else {
+                    $newSettingsContent.Add($line) # Add all other lines as-is
+                }
+            }
+            
+            if ($chainRestored) {
+                Set-Content -Path $settingsCfgPath -Value $newSettingsContent
+            } else {
+                Write-Warning "  Could not find [Post Processing] section or chain line in settings.cfg after configurator run. Restore failed."
+            }
+        }
+        catch {
+            $scriptSuccessfullyCompleted = $false # Flag failure
+            Write-Host "An error occurred during post processing chain restore: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    } elseif ($scriptSuccessfullyCompleted -and -not $savedShaderChainLine) {
+        Write-Host "`nNo post processing chain was saved. Skipping restore." -ForegroundColor Gray
+    }
+
     if (-not $scriptSuccessfullyCompleted) {
         if ($lastLine) {
             if ($lastLine -imatch 'completed') { Write-Host "`nFinal status from configurator: $lastLine" -ForegroundColor Green }
@@ -586,6 +611,7 @@ if ($scriptSuccessfullyCompleted) {
     }
 }
 
+# --- 11. Perform final tweak on openmw.cfg ---
 if ($scriptSuccessfullyCompleted) {
     Write-Host "`nPerforming final tweak on openmw.cfg..." -ForegroundColor Cyan
     $cfgPath = Join-Path -Path $OutputDirectory -ChildPath "openmw.cfg"
@@ -622,6 +648,7 @@ if ($scriptSuccessfullyCompleted) {
     }
 }
 
+# --- 12. Check conditions for GitHub backup ---
 if ($scriptSuccessfullyCompleted) {
     Write-Host "`nChecking conditions for GitHub backup..." -ForegroundColor Cyan
     $timeThreshold = New-TimeSpan -Hours 24
