@@ -1,7 +1,3 @@
-<# .VERSION_INFO
-    Backup Date: 2025-10-10 09:17:49
-    Lines Changed Since Last Backup: 30
-#>
 <#
 .SYNOPSIS
     Performs a self-backup, cleans mod folder names, interactively handles nested mod options,
@@ -55,7 +51,39 @@ $LogVersionsToKeep = 7
 
 # --- Script Body ---
 
-# --- 01. Resolve Working Directory ---
+# --- 01. Preserve Custom Post Processing Chain ---
+# MOVED: This is now run first to ensure the value is saved before any other operation.
+Write-Host "Checking for post processing chain in settings.cfg..." -ForegroundColor Cyan
+$customChainValue = $null
+$settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
+
+if (Test-Path $settingsCfgPath) {
+    try {
+        $settingsContent = Get-Content -Path $settingsCfgPath -ErrorAction Stop
+        $inPostProcessingSection = $false
+        foreach ($line in $settingsContent) {
+            if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
+            if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
+            if ($inPostProcessingSection -and $line.Trim().StartsWith("chain")) {
+                $customChainValue = $line # Store the entire original line
+                Write-Host "  Found existing post processing chain. It will be restored after configuration." -ForegroundColor Green
+                Write-Host "    $($customChainValue.Trim())" -ForegroundColor DarkGray
+                break
+            }
+        }
+        if (-not $customChainValue) {
+            Write-Host "  No 'chain' entry found in [Post Processing] section. No value to restore." -ForegroundColor Gray
+        }
+    }
+    catch {
+        Write-Warning "  Error reading settings.cfg: $($_.Exception.Message). Cannot preserve post processing chain."
+    }
+} else {
+    Write-Warning "  settings.cfg not found. Cannot preserve post processing chain."
+}
+
+
+# --- 02. Resolve Working Directory ---
 $ResolvedWorkingDirectory = $null
 if ($PSScriptRoot) {
     $ResolvedWorkingDirectory = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath $WorkingDirectory)
@@ -68,7 +96,7 @@ if ($PSScriptRoot) {
 }
 
 
-# --- 02. Self-Backup and Versioning ---
+# --- 03. Self-Backup and Versioning ---
 Write-Host "Performing self-backup and versioning..." -ForegroundColor Cyan
 
 $thisScriptPath = $MyInvocation.MyCommand.Path
@@ -126,7 +154,7 @@ if ($ResolvedWorkingDirectory) {
 }
 
 
-# --- 03. Setup Logging ---
+# --- 04. Setup Logging ---
 if ($ResolvedWorkingDirectory) {
     $logDir = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "log"
     if (-not (Test-Path $logDir)) {
@@ -152,7 +180,7 @@ if ($ResolvedWorkingDirectory) {
     Write-Host "Logging output to: $($newLogFileName)" -ForegroundColor DarkGray
 }
 
-# --- 04. Load or Prompt for ModRootDirectory ---
+# --- 05. Load or Prompt for ModRootDirectory ---
 $ModRootDirectory = $null
 $configFilePath = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "config.json"
 
@@ -178,7 +206,7 @@ while (-not $ModRootDirectory) {
     }
 }
 
-# --- 05. Organize External Backups ---
+# --- 06. Organize External Backups ---
 Write-Host "`nOrganizing external OpenMW backups..." -ForegroundColor Cyan
 
 if ($ResolvedWorkingDirectory) {
@@ -220,7 +248,7 @@ if ($ResolvedWorkingDirectory) {
 }
 
 
-# --- 06. Sanitize Top-Level Folder Names ---
+# --- 07. Sanitize Top-Level Folder Names ---
 Write-Host "`nSanitizing top-level folder names in '$ModRootDirectory'..." -ForegroundColor Cyan
 
 $scriptSuccessfullyCompleted = $true # Assume success until an error occurs
@@ -238,36 +266,6 @@ Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
             Write-Warning "Could not rename '$oldName' to '$newName'. It might be in use or a folder with that name already exists."
         }
     }
-}
-
-# --- 07. Preserve Custom Post Processing Chain ---
-Write-Host "`nChecking for post processing chain in settings.cfg..." -ForegroundColor Cyan
-$customChainValue = $null
-$settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
-
-if (Test-Path $settingsCfgPath) {
-    try {
-        $settingsContent = Get-Content -Path $settingsCfgPath -ErrorAction Stop
-        $inPostProcessingSection = $false
-        foreach ($line in $settingsContent) {
-            if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
-            if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
-            if ($inPostProcessingSection -and $line.Trim().StartsWith("chain")) {
-                $customChainValue = $line # Store the entire original line
-                Write-Host "  Found existing post processing chain. It will be restored after configuration." -ForegroundColor Green
-                Write-Host "    $($customChainValue.Trim())" -ForegroundColor DarkGray
-                break
-            }
-        }
-        if (-not $customChainValue) {
-            Write-Host "  No 'chain' entry found in [Post Processing] section. No value to restore." -ForegroundColor Gray
-        }
-    }
-    catch {
-        Write-Warning "  Error reading settings.cfg: $($_.Exception.Message). Cannot preserve post processing chain."
-    }
-} else {
-    Write-Warning "  settings.cfg not found. Cannot preserve post processing chain."
 }
 
 
@@ -379,7 +377,6 @@ while ($processingQueue.Count -gt 0) {
                 $selectedPluginNames = @()
 
                 if ($pluginChoiceFile -and (Test-Path $pluginChoiceFile)) {
-                    # BUG FIX 1: Wrap Get-Content in @() to ensure it's always an array
                     $savedPluginNames = @(Get-Content $pluginChoiceFile)
                     $currentPluginNames = $pluginsInPath | Select-Object -ExpandProperty Name
                     if (($savedPluginNames | Where-Object { $currentPluginNames -icontains $_ } | Measure-Object).Count -eq $savedPluginNames.Count) {
@@ -405,17 +402,10 @@ while ($processingQueue.Count -gt 0) {
                     } else { Write-Host "  Invalid plugin selection." -ForegroundColor Red }
                 }
                 
-                # === START BUG FIX ===
-                # Create an empty HashSet with the correct comparer first.
-                # This avoids PS 5.1 constructor overload issues with ::new()
                 $selectedPluginSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::InvariantCultureIgnoreCase)
-                
-                # Loop through $selectedPluginNames (forcing it to be an array with @())
-                # This gracefully handles both single-string and array-of-strings cases.
                 foreach ($pluginName in @($selectedPluginNames)) {
                     $selectedPluginSet.Add($pluginName) | Out-Null
                 }
-                # === END BUG FIX ===
 
                 $pluginsInPath | Where-Object { $selectedPluginSet.Contains($_.Name) } | ForEach-Object { $finalPluginFiles.Add($_) }
 
@@ -494,7 +484,7 @@ insertBlock = """
 $pathsBlock
 """
 before = "Tools\\MOMWToolsPackCustom"
-[[CustomDizations.insert]]
+[[Customizations.insert]]
 insertBlock = """
 $filesBlock
 """
@@ -601,6 +591,7 @@ if ($scriptSuccessfullyCompleted -and $customChainValue) {
             $settingsContentList[$existingChainIndex] = $customChainValue
         }
         elseif ($postProcessingIndex -ne -1) {
+            # No chain line found, but the section exists. Insert it.
             Write-Host "  No existing chain line found. Inserting saved value into [Post Processing] section." -ForegroundColor Green
             $settingsContentList.Insert($postProcessingIndex + 1, $customChainValue)
         }
