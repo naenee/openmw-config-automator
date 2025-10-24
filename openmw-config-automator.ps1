@@ -241,30 +241,33 @@ Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
 }
 
 # --- 07. Preserve Custom Post Processing Chain ---
-Write-Host "`nChecking for custom post processing chain in settings.cfg..." -ForegroundColor Cyan
+Write-Host "`nChecking for post processing chain in settings.cfg..." -ForegroundColor Cyan
 $customChainValue = $null
 $settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
-$defaultChain = "ssao_hq,underwater_interior_effects,underwater_effects,clouds,godrays,bloomlinear,hdr,FollowerAA,war_adjustments"
 
 if (Test-Path $settingsCfgPath) {
-    $settingsContent = Get-Content -Path $settingsCfgPath
-    $inPostProcessingSection = $false
-    foreach ($line in $settingsContent) {
-        if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
-        if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
-        if ($inPostProcessingSection -and $line.Trim().StartsWith("chain")) {
-            $currentChain = ($line -split '=', 2)[1].Trim()
-            if ($currentChain -ne $defaultChain) {
+    try {
+        $settingsContent = Get-Content -Path $settingsCfgPath -ErrorAction Stop
+        $inPostProcessingSection = $false
+        foreach ($line in $settingsContent) {
+            if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
+            if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
+            if ($inPostProcessingSection -and $line.Trim().StartsWith("chain")) {
                 $customChainValue = $line # Store the entire original line
-                Write-Host "  Found custom post processing chain. It will be restored after configuration." -ForegroundColor Green
-            } else {
-                Write-Host "  Post processing chain is set to default. No action needed." -ForegroundColor Gray
+                Write-Host "  Found existing post processing chain. It will be restored after configuration." -ForegroundColor Green
+                Write-Host "    $($customChainValue.Trim())" -ForegroundColor DarkGray
+                break
             }
-            break
+        }
+        if (-not $customChainValue) {
+            Write-Host "  No 'chain' entry found in [Post Processing] section. No value to restore." -ForegroundColor Gray
         }
     }
+    catch {
+        Write-Warning "  Error reading settings.cfg: $($_.Exception.Message). Cannot preserve post processing chain."
+    }
 } else {
-    Write-Warning "  settings.cfg not found. Cannot preserve custom post processing chain."
+    Write-Warning "  settings.cfg not found. Cannot preserve post processing chain."
 }
 
 
@@ -557,46 +560,48 @@ if ($scriptSuccessfullyCompleted) {
 }
 
 if ($scriptSuccessfullyCompleted -and $customChainValue) {
-    Write-Host "`nRestoring custom post processing chain..." -ForegroundColor Cyan
+    Write-Host "`nRestoring post processing chain..." -ForegroundColor Cyan
     try {
         $settingsContentArray = @(Get-Content -Path $settingsCfgPath)
         $settingsContentList = [System.Collections.Generic.List[string]]::new()
-        foreach ($line in $settingsContentArray) {
-            $settingsContentList.Add($line)
-        }
+        $settingsContentArray | ForEach-Object { $settingsContentList.Add($_) }
 
         $postProcessingIndex = -1
+        $existingChainIndex = -1
+
+        # Find the [Post Processing] section and the first 'chain' line within it
         for ($i = 0; $i -lt $settingsContentList.Count; $i++) {
             if ($settingsContentList[$i].Trim() -eq "[Post Processing]") {
                 $postProcessingIndex = $i
+                continue
+            }
+            # Stop searching if we hit the next section
+            if ($postProcessingIndex -ne -1 -and $settingsContentList[$i].Trim().StartsWith("[")) {
                 break
+            }
+            # Find the first 'chain' line *after* finding the section
+            if ($postProcessingIndex -ne -1 -and $existingChainIndex -eq -1 -and $settingsContentList[$i].Trim().StartsWith("chain")) {
+                $existingChainIndex = $i
+                # We found the line to replace, but we don't break, 
+                # just in case the section is empty and we need the $postProcessingIndex
             }
         }
         
-        if ($postProcessingIndex -ne -1) {
-            # Find the end of the section
-            $sectionEndIndex = $settingsContentList.Count
-            for ($i = $postProcessingIndex + 1; $i -lt $settingsContentList.Count; $i++) {
-                if ($settingsContentList[$i].Trim().StartsWith("[")) {
-                    $sectionEndIndex = $i
-                    break
-                }
-            }
-            
-            # Comment out any existing "chain" lines within the section
-            for ($i = $postProcessingIndex + 1; $i -lt $sectionEndIndex; $i++) {
-                if ($settingsContentList[$i].Trim().StartsWith("chain")) {
-                    $settingsContentList[$i] = "#" + $settingsContentList[$i]
-                }
-            }
-            
-            # Insert the custom chain at the top of the section
+        if ($existingChainIndex -ne -1) {
+            # Found a chain line to replace
+            Write-Host "  Replacing existing chain line with saved value." -ForegroundColor Green
+            $settingsContentList[$existingChainIndex] = $customChainValue
+        }
+        elseif ($postProcessingIndex -ne -1) {
+            # No chain line found, but the section exists. Insert it.
+            Write-Host "  No existing chain line found. Inserting saved value into [Post Processing] section." -ForegroundColor Green
             $settingsContentList.Insert($postProcessingIndex + 1, $customChainValue)
-            Set-Content -Path $settingsCfgPath -Value $settingsContentList
-            Write-Host "  Successfully restored custom post processing chain." -ForegroundColor Green
-        } else {
+        }
+        else {
             Write-Warning "  Could not find '[Post Processing]' section. Custom setting was not restored."
         }
+
+        Set-Content -Path $settingsCfgPath -Value $settingsContentList
     }
     catch {
         Write-Error "An error occurred while restoring the post processing chain: $($_.Exception.Message)"
@@ -667,5 +672,3 @@ if ($scriptSuccessfullyCompleted) {
 Write-Host "`nAll steps completed!" -ForegroundColor Green
 
 if ($global:Transcript) { Stop-Transcript }
-
-
