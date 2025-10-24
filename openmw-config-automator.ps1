@@ -1,3 +1,7 @@
+<# .VERSION_INFO
+    Backup Date: 2025-10-10 09:17:49
+    Lines Changed Since Last Backup: 30
+#>
 <#
 .SYNOPSIS
     Performs a self-backup, cleans mod folder names, interactively handles nested mod options,
@@ -10,14 +14,14 @@
     03. On first run, prompts for the mod directory path and saves it to a config file.
     04. Organizes and cleans up external config backups (openmw.cfg, settings.cfg, etc.).
     05. Sanitizes top-level folder names in the mod directory.
-    06. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
-    07. Saves choices to individual files for persistence.
-    08. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
-    09. Generates the momw-customizations.toml file with correct formatting.
-    10. Manages backups of the previous customization file and old log files.
-    11. Saves the current post-processing shader chain from settings.cfg.
-    12. Runs the MOMW configurator, filtering known warnings (including validator replacement warnings).
-    13. Restores the saved post-processing shader chain to settings.cfg.
+    06. Preserves custom post-processing settings from settings.cfg.
+    07. Scans a custom mod folder and intelligently auto-selects "00 Core" folders.
+    08. Saves choices to individual files for persistence.
+    09. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
+    10. Generates the momw-customizations.toml file with correct formatting.
+    11. Manages backups of the previous customization file and old log files.
+    12. Runs the MOMW configurator with a native PowerShell progress bar.
+    13. Restores custom post-processing settings to settings.cfg.
     14. Rearranges a specific line within the final openmw.cfg for load order optimization.
     15. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
 
@@ -136,7 +140,7 @@ if ($ResolvedWorkingDirectory) {
         $logsToDelete = $allLogs | Select-Object -Skip ($LogVersionsToKeep - 1)
         foreach ($log in $logsToDelete) {
             Write-Host "  Removing old log: $($log.Name)" -ForegroundColor Magenta
-            Remove-Item -Path $log.FullName -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path $log.FullName -Force
         }
     }
 
@@ -236,7 +240,35 @@ Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
     }
 }
 
-# --- 07. Scan and Generate TOML File ---
+# --- 07. Preserve Custom Post Processing Chain ---
+Write-Host "`nChecking for custom post processing chain in settings.cfg..." -ForegroundColor Cyan
+$customChainValue = $null
+$settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
+$defaultChain = "ssao_hq,underwater_interior_effects,underwater_effects,clouds,godrays,bloomlinear,hdr,FollowerAA,war_adjustments"
+
+if (Test-Path $settingsCfgPath) {
+    $settingsContent = Get-Content -Path $settingsCfgPath
+    $inPostProcessingSection = $false
+    foreach ($line in $settingsContent) {
+        if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
+        if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
+        if ($inPostProcessingSection -and $line.Trim().StartsWith("chain")) {
+            $currentChain = ($line -split '=', 2)[1].Trim()
+            if ($currentChain -ne $defaultChain) {
+                $customChainValue = $line # Store the entire original line
+                Write-Host "  Found custom post processing chain. It will be restored after configuration." -ForegroundColor Green
+            } else {
+                Write-Host "  Post processing chain is set to default. No action needed." -ForegroundColor Gray
+            }
+            break
+        }
+    }
+} else {
+    Write-Warning "  settings.cfg not found. Cannot preserve custom post processing chain."
+}
+
+
+# --- 08. Scan and Generate TOML File ---
 Write-Host "`nScanning for mods in: $ModRootDirectory" -ForegroundColor Cyan
 
 $ChoicesDirectoryPath = $null
@@ -368,7 +400,7 @@ while ($processingQueue.Count -gt 0) {
                 }
                 $pluginsInPath | Where-Object { $selectedPluginNames -icontains $_.Name } | ForEach-Object { $finalPluginFiles.Add($_) }
             } else {
-                foreach ($plugin in @($pluginsInPath)) { $finalPluginFiles.Add($_) }
+                foreach ($plugin in @($pluginsInPath)) { $finalPluginFiles.Add($plugin) }
             }
         } else {
             $subDirectories = Get-ChildItem -Path $currentPath -Directory -ErrorAction SilentlyContinue
@@ -475,35 +507,6 @@ catch {
     $scriptSuccessfullyCompleted = $false
 }
 
-# --- 08. Save Custom Post Processing Chain ---
-Write-Host "`nSaving post processing chain from settings.cfg..." -ForegroundColor Cyan
-$savedShaderChainLine = $null
-$settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
-$chainFound = $false
-
-if (Test-Path $settingsCfgPath) {
-    # --- FIX --- Specify UTF8 encoding for reading
-    $settingsContent = Get-Content -Path $settingsCfgPath -Encoding UTF8
-    $inPostProcessingSection = $false
-    foreach ($line in $settingsContent) {
-        if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
-        if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
-        
-        if ($inPostProcessingSection -and $line.Trim() -imatch '^\s*chain\s*=') {
-            $savedShaderChainLine = $line # Save the *entire* original line
-            $chainFound = $true
-            Write-Host "  Successfully saved chain: $savedShaderChainLine" -ForegroundColor Green
-            break
-        }
-    }
-    if (-not $chainFound) {
-        Write-Host "  No 'chain' found in [Post Processing] section. Nothing to save." -ForegroundColor Gray
-    }
-} else {
-    Write-Warning "  settings.cfg not found. Cannot save post processing chain."
-}
-
-# --- 09. Run MOMW Configurator ---
 if ($scriptSuccessfullyCompleted) {
     Write-Host "`nRunning MOMW Configurator to apply changes..." -ForegroundColor Cyan
     $lastLine = ""
@@ -512,9 +515,7 @@ if ($scriptSuccessfullyCompleted) {
         $configuratorPath = Join-Path -Path $resolvedToolsPath -ChildPath "momw-configurator.exe"
         if (-not (Test-Path $configuratorPath)) { throw "momw-configurator.exe not found at: $configuratorPath" }
 
-        $argList = @("config", "--verbose", "--run-validator", "expanded-vanilla")
-        
-        $job = Start-Job -ScriptBlock { & $args[0] $args[1] 2>&1 } -ArgumentList @($configuratorPath, $argList)
+        $job = Start-Job -ScriptBlock { & $using:configuratorPath config expanded-vanilla --verbose 2>&1 }
         
         $spinner = '|', '/', '-', '\'
         $spinnerIndex = 0
@@ -527,36 +528,18 @@ if ($scriptSuccessfullyCompleted) {
         
         $output = Receive-Job $job
         $lastLine = $output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1
-        
-        # Define the strings to ignore in the output
-        $ignorePatterns = @(
-            'Skipping record of type SCPT',
-            'could not be loaded due to error: Unexpected Tag: LUAL',
-            'ignored empty value for key',
-            'Fully replaced paths were configured',
-            'There was an error running OpenMW-Validator',
-            'exit status 1'
-        )
+        $ignorePatterns = @('Skipping record of type SCPT', 'could not be loaded due to error: Unexpected Tag: LUAL', 'ignored empty value for key')
 
         $allWarningsAndErrors = $output | Where-Object { $_ -match 'warning' -or $_ -match 'error' }
-
         $relevantErrorsAndWarnings = $allWarningsAndErrors
         foreach ($pattern in $ignorePatterns) {
             $relevantErrorsAndWarnings = $relevantErrorsAndWarnings | Where-Object { $_ -notmatch $pattern }
         }
 
-        if ($job.State -ne 'Completed' -or $relevantErrorsAndWarnings.Count -gt 0) {
+        if ($relevantErrorsAndWarnings.Count -gt 0) {
             $scriptSuccessfullyCompleted = $false
             Write-Host "MOMW Configurator completed with relevant warnings or errors:" -ForegroundColor Red
-            
-            # Show all output if there was a real error
-            Write-Host "Displaying full output from configurator:" -ForegroundColor Gray
-            $output | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
-
-            if ($relevantErrorsAndWarnings.Count -gt 0) {
-                Write-Host "Relevant errors/warnings found:" -ForegroundColor Red
-                $relevantErrorsAndWarnings | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
-            }
+            $relevantErrorsAndWarnings | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
         } else { Write-Host "Configuration applied successfully (all benign issues filtered out)." -ForegroundColor Green }
     }
     catch {
@@ -564,78 +547,6 @@ if ($scriptSuccessfullyCompleted) {
         Write-Host "A critical error occurred while running the configurator: $($_.Exception.Message)" -ForegroundColor Red
     }
     finally { if ($job) { Remove-Job $job -Force } }
-
-    # --- 10. Restore Custom Post Processing Chain ---
-    # --- FIX --- This logic is now robust and handles insertion or replacement.
-    if ($scriptSuccessfullyCompleted -and $savedShaderChainLine) {
-        Write-Host "`nRestoring post processing chain to settings.cfg..." -ForegroundColor Cyan
-        try {
-            if (-not (Test-Path $settingsCfgPath)) { throw "settings.cfg not found at $settingsCfgPath" }
-
-            $settingsContent = Get-Content -Path $settingsCfgPath -Encoding UTF8
-            $newSettingsContent = [System.Collections.Generic.List[string]]::new()
-            $inPostProcessingSection = $false
-            $chainRestoredOrInserted = $false
-
-            for ($i = 0; $i -lt $settingsContent.Count; $i++) {
-                $line = $settingsContent[$i]
-                
-                if ($line.Trim() -eq "[Post Processing]") {
-                    $newSettingsContent.Add($line) # Add [Post Processing]
-                    $inPostProcessingSection = $true
-                    continue
-                }
-
-                if ($inPostProcessingSection) {
-                    # Check if we're at the next section
-                    if ($line.Trim().StartsWith("[")) {
-                        # We've reached the end of the [Post Processing] section
-                        if (-not $chainRestoredOrInserted) {
-                            # The chain was never found, so we must insert it
-                            $newSettingsContent.Add($savedShaderChainLine)
-                            Write-Host "  Inserted saved chain (was missing)." -ForegroundColor Green
-                            $chainRestoredOrInserted = $true
-                        }
-                        $inPostProcessingSection = $false
-                        $newSettingsContent.Add($line) # Add the new section header
-                        continue
-                    }
-
-                    # Check if this is the chain line
-                    if ($line.Trim() -imatch '^\s*chain\s*=' -and -not $chainRestoredOrInserted) {
-                        $newSettingsContent.Add($savedShaderChainLine) # Add our saved line
-                        $chainRestoredOrInserted = $true
-                        Write-Host "  Successfully restored chain (replaced existing)." -ForegroundColor Green
-                        # Don't add the original line, just skip to next loop iteration
-                        continue
-                    }
-                }
-                
-                # Add all other lines
-                $newSettingsContent.Add($line)
-            }
-            
-            # Handle case where [Post Processing] is the *last* section in the file
-            if ($inPostProcessingSection -and -not $chainRestoredOrInserted) {
-                $newSettingsContent.Add($savedShaderChainLine)
-                Write-Host "  Inserted saved chain (at end of file)." -ForegroundColor Green
-                $chainRestoredOrInserted = $true
-            }
-            
-            if ($chainRestoredOrInserted) {
-                Set-Content -Path $settingsCfgPath -Value $newSettingsContent -Encoding UTF8
-            } else {
-                Write-Warning "  Could not find [Post Processing] section in settings.cfg after configurator run. Restore failed."
-            }
-        }
-        catch {
-            $scriptSuccessfullyCompleted = $false # Flag failure
-            Write-Host "An error occurred during post processing chain restore: $($_.Exception.Message)" -ForegroundColor Red
-        }
-    } elseif ($scriptSuccessfullyCompleted -and -not $savedShaderChainLine) {
-        Write-Host "`nNo post processing chain was saved. Skipping restore." -ForegroundColor Gray
-    }
-    # --- END FIX ---
 
     if (-not $scriptSuccessfullyCompleted) {
         if ($lastLine) {
@@ -645,7 +556,54 @@ if ($scriptSuccessfullyCompleted) {
     }
 }
 
-# --- 11. Perform final tweak on openmw.cfg ---
+if ($scriptSuccessfullyCompleted -and $customChainValue) {
+    Write-Host "`nRestoring custom post processing chain..." -ForegroundColor Cyan
+    try {
+        $settingsContentArray = @(Get-Content -Path $settingsCfgPath)
+        $settingsContentList = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in $settingsContentArray) {
+            $settingsContentList.Add($line)
+        }
+
+        $postProcessingIndex = -1
+        for ($i = 0; $i -lt $settingsContentList.Count; $i++) {
+            if ($settingsContentList[$i].Trim() -eq "[Post Processing]") {
+                $postProcessingIndex = $i
+                break
+            }
+        }
+        
+        if ($postProcessingIndex -ne -1) {
+            # Find the end of the section
+            $sectionEndIndex = $settingsContentList.Count
+            for ($i = $postProcessingIndex + 1; $i -lt $settingsContentList.Count; $i++) {
+                if ($settingsContentList[$i].Trim().StartsWith("[")) {
+                    $sectionEndIndex = $i
+                    break
+                }
+            }
+            
+            # Comment out any existing "chain" lines within the section
+            for ($i = $postProcessingIndex + 1; $i -lt $sectionEndIndex; $i++) {
+                if ($settingsContentList[$i].Trim().StartsWith("chain")) {
+                    $settingsContentList[$i] = "#" + $settingsContentList[$i]
+                }
+            }
+            
+            # Insert the custom chain at the top of the section
+            $settingsContentList.Insert($postProcessingIndex + 1, $customChainValue)
+            Set-Content -Path $settingsCfgPath -Value $settingsContentList
+            Write-Host "  Successfully restored custom post processing chain." -ForegroundColor Green
+        } else {
+            Write-Warning "  Could not find '[Post Processing]' section. Custom setting was not restored."
+        }
+    }
+    catch {
+        Write-Error "An error occurred while restoring the post processing chain: $($_.Exception.Message)"
+        $scriptSuccessfullyCompleted = $false
+    }
+}
+
 if ($scriptSuccessfullyCompleted) {
     Write-Host "`nPerforming final tweak on openmw.cfg..." -ForegroundColor Cyan
     $cfgPath = Join-Path -Path $OutputDirectory -ChildPath "openmw.cfg"
@@ -682,7 +640,6 @@ if ($scriptSuccessfullyCompleted) {
     }
 }
 
-# --- 12. Check conditions for GitHub backup ---
 if ($scriptSuccessfullyCompleted) {
     Write-Host "`nChecking conditions for GitHub backup..." -ForegroundColor Cyan
     $timeThreshold = New-TimeSpan -Hours 24
@@ -704,9 +661,11 @@ if ($scriptSuccessfullyCompleted) {
         $githubScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "save-to-git.ps1"
         if (Test-Path $githubScriptPath) { & $githubScriptPath }
         else { Write-Warning "GitHub save script not found at '$githubScriptPath'. Skipping save." }
-    } else { Write-Host "  Upload-conditions not met (no changes and not enough time elapsed). Skipping GitHub backup." -ForegroundColor Gray }
+    } else { Write-Host "  Upload conditions not met (no changes and not enough time elapsed). Skipping GitHub backup." -ForegroundColor Gray }
 } else { Write-Host "`nSkipping GitHub backup due to errors encountered during script execution." -ForegroundColor Yellow }
 
 Write-Host "`nAll steps completed!" -ForegroundColor Green
 
 if ($global:Transcript) { Stop-Transcript }
+
+
