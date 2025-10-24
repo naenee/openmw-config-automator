@@ -248,8 +248,18 @@ if (Test-Path $settingsCfgPath) {
     foreach ($line in $settingsContent) {
         if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
         if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
-        if ($inPostProcessingSection -and $line.Trim().StartsWith("chain")) {
-            $currentChain = ($line -split '=', 2)[1].Trim()
+        
+        # --- START FIX ---
+        # Use case-insensitive match (-imatch) and check for 'chain' followed by an equals sign.
+        if ($inPostProcessingSection -and $line.Trim() -imatch '^\s*chain\s*=') {
+            
+            # Split the line at the first equals sign
+            $valuePart = ($line -split '=', 2)[1]
+            
+            # Split the value part at the first comment marker '#' and take the first part
+            $currentChain = ($valuePart -split '#', 2)[0].Trim() 
+            # --- END FIX ---
+
             if ($currentChain -ne $defaultChain) {
                 $isChainCustom = $true
                 Write-Host "  Found custom post processing chain. Configurator will use '--no-shaders-yaml' switch." -ForegroundColor Green
@@ -396,7 +406,7 @@ while ($processingQueue.Count -gt 0) {
                 }
                 $pluginsInPath | Where-Object { $selectedPluginNames -icontains $_.Name } | ForEach-Object { $finalPluginFiles.Add($_) }
             } else {
-                foreach ($plugin in @($pluginsInPath)) { $finalPluginFiles.Add($plugin) }
+                foreach ($plugin in @($pluginsInPath)) { $finalPluginFiles.Add($_) }
             }
         } else {
             $subDirectories = Get-ChildItem -Path $currentPath -Directory -ErrorAction SilentlyContinue
@@ -639,4 +649,3 @@ if ($scriptSuccessfullyCompleted) {
 Write-Host "`nAll steps completed!" -ForegroundColor Green
 
 if ($global:Transcript) { Stop-Transcript }
-
