@@ -136,7 +136,6 @@ if ($ResolvedWorkingDirectory) {
         $logsToDelete = $allLogs | Select-Object -Skip ($LogVersionsToKeep - 1)
         foreach ($log in $logsToDelete) {
             Write-Host "  Removing old log: $($log.Name)" -ForegroundColor Magenta
-            # --- FIX --- Suppress errors if the log file is still in use
             Remove-Item -Path $log.FullName -Force -ErrorAction SilentlyContinue
         }
     }
@@ -483,7 +482,8 @@ $settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
 $chainFound = $false
 
 if (Test-Path $settingsCfgPath) {
-    $settingsContent = Get-Content -Path $settingsCfgPath
+    # --- FIX --- Specify UTF8 encoding for reading
+    $settingsContent = Get-Content -Path $settingsCfgPath -Encoding UTF8
     $inPostProcessingSection = $false
     foreach ($line in $settingsContent) {
         if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
@@ -566,33 +566,66 @@ if ($scriptSuccessfullyCompleted) {
     finally { if ($job) { Remove-Job $job -Force } }
 
     # --- 10. Restore Custom Post Processing Chain ---
+    # --- FIX --- This logic is now robust and handles insertion or replacement.
     if ($scriptSuccessfullyCompleted -and $savedShaderChainLine) {
         Write-Host "`nRestoring post processing chain to settings.cfg..." -ForegroundColor Cyan
         try {
             if (-not (Test-Path $settingsCfgPath)) { throw "settings.cfg not found at $settingsCfgPath" }
 
-            $settingsContent = Get-Content -Path $settingsCfgPath
+            $settingsContent = Get-Content -Path $settingsCfgPath -Encoding UTF8
             $newSettingsContent = [System.Collections.Generic.List[string]]::new()
             $inPostProcessingSection = $false
-            $chainRestored = $false
+            $chainRestoredOrInserted = $false
 
-            foreach ($line in $settingsContent) {
-                if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true }
-                if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false }
+            for ($i = 0; $i -lt $settingsContent.Count; $i++) {
+                $line = $settingsContent[$i]
                 
-                if ($inPostProcessingSection -and $line.Trim() -imatch '^\s*chain\s*=' -and -not $chainRestored) {
-                    $newSettingsContent.Add($savedShaderChainLine) # Add our saved line
-                    $chainRestored = $true
-                    Write-Host "  Successfully restored chain." -ForegroundColor Green
-                } else {
-                    $newSettingsContent.Add($line) # Add all other lines as-is
+                if ($line.Trim() -eq "[Post Processing]") {
+                    $newSettingsContent.Add($line) # Add [Post Processing]
+                    $inPostProcessingSection = $true
+                    continue
                 }
+
+                if ($inPostProcessingSection) {
+                    # Check if we're at the next section
+                    if ($line.Trim().StartsWith("[")) {
+                        # We've reached the end of the [Post Processing] section
+                        if (-not $chainRestoredOrInserted) {
+                            # The chain was never found, so we must insert it
+                            $newSettingsContent.Add($savedShaderChainLine)
+                            Write-Host "  Inserted saved chain (was missing)." -ForegroundColor Green
+                            $chainRestoredOrInserted = $true
+                        }
+                        $inPostProcessingSection = $false
+                        $newSettingsContent.Add($line) # Add the new section header
+                        continue
+                    }
+
+                    # Check if this is the chain line
+                    if ($line.Trim() -imatch '^\s*chain\s*=' -and -not $chainRestoredOrInserted) {
+                        $newSettingsContent.Add($savedShaderChainLine) # Add our saved line
+                        $chainRestoredOrInserted = $true
+                        Write-Host "  Successfully restored chain (replaced existing)." -ForegroundColor Green
+                        # Don't add the original line, just skip to next loop iteration
+                        continue
+                    }
+                }
+                
+                # Add all other lines
+                $newSettingsContent.Add($line)
             }
             
-            if ($chainRestored) {
-                Set-Content -Path $settingsCfgPath -Value $newSettingsContent
+            # Handle case where [Post Processing] is the *last* section in the file
+            if ($inPostProcessingSection -and -not $chainRestoredOrInserted) {
+                $newSettingsContent.Add($savedShaderChainLine)
+                Write-Host "  Inserted saved chain (at end of file)." -ForegroundColor Green
+                $chainRestoredOrInserted = $true
+            }
+            
+            if ($chainRestoredOrInserted) {
+                Set-Content -Path $settingsCfgPath -Value $newSettingsContent -Encoding UTF8
             } else {
-                Write-Warning "  Could not find [Post Processing] section or chain line in settings.cfg after configurator run. Restore failed."
+                Write-Warning "  Could not find [Post Processing] section in settings.cfg after configurator run. Restore failed."
             }
         }
         catch {
@@ -602,6 +635,7 @@ if ($scriptSuccessfullyCompleted) {
     } elseif ($scriptSuccessfullyCompleted -and -not $savedShaderChainLine) {
         Write-Host "`nNo post processing chain was saved. Skipping restore." -ForegroundColor Gray
     }
+    # --- END FIX ---
 
     if (-not $scriptSuccessfullyCompleted) {
         if ($lastLine) {
@@ -670,7 +704,7 @@ if ($scriptSuccessfullyCompleted) {
         $githubScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "save-to-git.ps1"
         if (Test-Path $githubScriptPath) { & $githubScriptPath }
         else { Write-Warning "GitHub save script not found at '$githubScriptPath'. Skipping save." }
-    } else { Write-Host "  Upload conditions not met (no changes and not enough time elapsed). Skipping GitHub backup." -ForegroundColor Gray }
+    } else { Write-Host "  Upload-conditions not met (no changes and not enough time elapsed). Skipping GitHub backup." -ForegroundColor Gray }
 } else { Write-Host "`nSkipping GitHub backup due to errors encountered during script execution." -ForegroundColor Yellow }
 
 Write-Host "`nAll steps completed!" -ForegroundColor Green
