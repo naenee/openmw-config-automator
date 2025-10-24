@@ -111,7 +111,7 @@ if ($ResolvedWorkingDirectory) {
     $newBackupName = "$thisScriptName.backup.$timestamp.ps1"
     $newBackupPath = Join-Path -Path $selfBackupDir -ChildPath $newBackupName
     
-    ($header + "`n" + ($currentScriptContent | Out-String)) | Set-Content -Path $newBackupPath
+    Set-Content -Path $newBackupPath -Value ($header, $currentScriptContent)
     Set-Content -Path $hashFilePath -Value $currentHash
 
     Write-Host "  Successfully created backup: $newBackupName" -ForegroundColor Green
@@ -308,12 +308,14 @@ while ($processingQueue.Count -gt 0) {
 
     if ($numberedOptions.Count -gt 0) {
         if ($numberedOptions.Count -eq 1 -and $numberedOptions[0].Name -imatch '00 Core*') {
-            Write-Host "\nOptions for '$topLevelModName' in '$($currentItem.PathToProcess | Split-Path -Leaf)':" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Options for '$topLevelModName' in '$($currentItem.PathToProcess | Split-Path -Leaf)':" -ForegroundColor Yellow
             Write-Host "  Automatically selecting single '00 Core' option." -ForegroundColor Green
             $queueObject = [PSCustomObject]@{ TopLevelModName = $topLevelModName; PathToProcess = $numberedOptions[0].FullName }
             $processingQueue.Enqueue($queueObject)
         } else {
-            Write-Host "\nOptions for '$topLevelModName' in '$($currentItem.PathToProcess | Split-Path -Leaf)':" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Options for '$topLevelModName' in '$($currentItem.PathToProcess | Split-Path -Leaf)':" -ForegroundColor Yellow
             $safeChoicePath = $currentPath.Replace($ModRootDirectory, "").Trim("\") -replace '[^a-zA-Z0-9]', '_'
             $folderChoiceKey = "$($topLevelModName)_$($safeChoicePath)"
             $folderChoiceFile = if ($ChoicesDirectoryPath) { Join-Path -Path $ChoicesDirectoryPath -ChildPath "$folderChoiceKey.txt" } else { $null }
@@ -360,14 +362,14 @@ while ($processingQueue.Count -gt 0) {
             $dataDirectories = [System.Collections.Generic.List[string]]::new()
             if ($pluginsInPath.Count -gt 0) {
                 $pluginParentDirs = $pluginsInPath | ForEach-Object { $_.Directory.FullName } | Sort-Object -Unique
-                foreach ($dir in @($pluginParentDirs)) { $dataDirectories.Add($dir) }
+                foreach ($dir in $pluginParentDirs) { $dataDirectories.Add($dir) }
             }
             if ($dataFoldersInPath.Count -gt 0) {
                 $dataFolderParentDirs = $dataFoldersInPath | ForEach-Object { $_.Parent.FullName } | Sort-Object -Unique
-                foreach ($dir in @($dataFolderParentDirs)) { $dataDirectories.Add($dir) }
+                foreach ($dir in $dataFolderParentDirs) { $dataDirectories.Add($dir) }
             }
             $uniqueDataDirs = $dataDirectories | Sort-Object -Unique
-            foreach ($dir in @($uniqueDataDirs)) { $finalModPaths.Add($dir) }
+            foreach ($dir in $uniqueDataDirs) { $finalModPaths.Add($dir) }
 
             $espFilesInMod = $pluginsInPath | Where-Object { $_.Extension -eq ".esp" }
             if ($espFilesInMod.Count -gt 1) {
@@ -377,7 +379,8 @@ while ($processingQueue.Count -gt 0) {
                 $selectedPluginNames = @()
 
                 if ($pluginChoiceFile -and (Test-Path $pluginChoiceFile)) {
-                    $savedPluginNames = Get-Content $pluginChoiceFile
+                    # BUG FIX 1: Wrap Get-Content in @() to ensure it's always an array
+                    $savedPluginNames = @(Get-Content $pluginChoiceFile)
                     $currentPluginNames = $pluginsInPath | Select-Object -ExpandProperty Name
                     if (($savedPluginNames | Where-Object { $currentPluginNames -icontains $_ } | Measure-Object).Count -eq $savedPluginNames.Count) {
                         $selectedPluginNames = $savedPluginNames
@@ -401,9 +404,23 @@ while ($processingQueue.Count -gt 0) {
                         }
                     } else { Write-Host "  Invalid plugin selection." -ForegroundColor Red }
                 }
-                $pluginsInPath | Where-Object { $selectedPluginNames -icontains $_.Name } | ForEach-Object { $finalPluginFiles.Add($_) }
+                
+                # === START BUG FIX ===
+                # Create an empty HashSet with the correct comparer first.
+                # This avoids PS 5.1 constructor overload issues with ::new()
+                $selectedPluginSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::InvariantCultureIgnoreCase)
+                
+                # Loop through $selectedPluginNames (forcing it to be an array with @())
+                # This gracefully handles both single-string and array-of-strings cases.
+                foreach ($pluginName in @($selectedPluginNames)) {
+                    $selectedPluginSet.Add($pluginName) | Out-Null
+                }
+                # === END BUG FIX ===
+
+                $pluginsInPath | Where-Object { $selectedPluginSet.Contains($_.Name) } | ForEach-Object { $finalPluginFiles.Add($_) }
+
             } else {
-                foreach ($plugin in @($pluginsInPath)) { $finalPluginFiles.Add($plugin) }
+                foreach ($plugin in $pluginsInPath) { $finalPluginFiles.Add($plugin) }
             }
         } else {
             $subDirectories = Get-ChildItem -Path $currentPath -Directory -ErrorAction SilentlyContinue
@@ -428,7 +445,7 @@ $allModPaths = $finalModPaths | Sort-Object -Unique
 $formattedModPaths = $allModPaths | ForEach-Object {
     $relativePath = $_.Replace($ModRootDirectory, "")
     Write-Host "  Path: ...$relativePath"
-    $_ -replace '\\', '\\'
+    $_ -replace '\\', '\\\\'
 }
 
 $modFilenames = $finalPluginFiles.Name | Sort-Object -Unique
@@ -446,7 +463,7 @@ if ($ExclusionsDirectoryPath) {
         $exclusionLines = Get-Content -Path $removeDataFilePath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         if ($exclusionLines.Count -gt 0) {
             Write-Host "  Found $($exclusionLines.Count) data exclusion(s)." -ForegroundColor Green
-            $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "' + ($_ -replace '\\', '\\') + '"' }
+            $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "' + ($_ -replace '\\', '\\\\') + '"' }
             $removeDataContent = $formattedExclusionLines -join ",`n"
             $removeDataBlock = "removeData = [`n$removeDataContent`n]"
         }
@@ -477,7 +494,7 @@ insertBlock = """
 $pathsBlock
 """
 before = "Tools\\MOMWToolsPackCustom"
-[[Customizations.insert]]
+[[CustomDizations.insert]]
 insertBlock = """
 $filesBlock
 """
@@ -534,10 +551,9 @@ if ($scriptSuccessfullyCompleted) {
         $ignorePatterns = @('Skipping record of type SCPT', 'could not be loaded due to error: Unexpected Tag: LUAL', 'ignored empty value for key')
 
         $allWarningsAndErrors = $output | Where-Object { $_ -match 'warning' -or $_ -match 'error' }
-        $relevantErrorsAndWarnings = $allWarningsAndErrors
-        foreach ($pattern in $ignorePatterns) {
-            $relevantErrorsAndWarnings = $relevantErrorsAndWarnings | Where-Object { $_ -notmatch $pattern }
-        }
+
+        $ignoreRegex = $ignorePatterns -join '|'
+        $relevantErrorsAndWarnings = $allWarningsAndErrors | Where-Object { $_ -notmatch $ignoreRegex }
 
         if ($relevantErrorsAndWarnings.Count -gt 0) {
             $scriptSuccessfullyCompleted = $false
@@ -562,38 +578,29 @@ if ($scriptSuccessfullyCompleted) {
 if ($scriptSuccessfullyCompleted -and $customChainValue) {
     Write-Host "`nRestoring post processing chain..." -ForegroundColor Cyan
     try {
-        $settingsContentArray = @(Get-Content -Path $settingsCfgPath)
-        $settingsContentList = [System.Collections.Generic.List[string]]::new()
-        $settingsContentArray | ForEach-Object { $settingsContentList.Add($_) }
+        $settingsContentList = [System.Collections.Generic.List[string]](Get-Content -Path $settingsCfgPath)
 
         $postProcessingIndex = -1
         $existingChainIndex = -1
 
-        # Find the [Post Processing] section and the first 'chain' line within it
         for ($i = 0; $i -lt $settingsContentList.Count; $i++) {
             if ($settingsContentList[$i].Trim() -eq "[Post Processing]") {
                 $postProcessingIndex = $i
                 continue
             }
-            # Stop searching if we hit the next section
             if ($postProcessingIndex -ne -1 -and $settingsContentList[$i].Trim().StartsWith("[")) {
                 break
             }
-            # Find the first 'chain' line *after* finding the section
             if ($postProcessingIndex -ne -1 -and $existingChainIndex -eq -1 -and $settingsContentList[$i].Trim().StartsWith("chain")) {
                 $existingChainIndex = $i
-                # We found the line to replace, but we don't break, 
-                # just in case the section is empty and we need the $postProcessingIndex
             }
         }
         
         if ($existingChainIndex -ne -1) {
-            # Found a chain line to replace
             Write-Host "  Replacing existing chain line with saved value." -ForegroundColor Green
             $settingsContentList[$existingChainIndex] = $customChainValue
         }
         elseif ($postProcessingIndex -ne -1) {
-            # No chain line found, but the section exists. Insert it.
             Write-Host "  No existing chain line found. Inserting saved value into [Post Processing] section." -ForegroundColor Green
             $settingsContentList.Insert($postProcessingIndex + 1, $customChainValue)
         }
@@ -618,11 +625,7 @@ if ($scriptSuccessfullyCompleted) {
     try {
         if (-not (Test-Path $cfgPath)) { throw "openmw.cfg not found at $cfgPath" }
 
-        $cfgContentArray = @(Get-Content -Path $cfgPath)
-        $cfgContentList = [System.Collections.Generic.List[string]]::new()
-        foreach ($line in $cfgContentArray) {
-            $cfgContentList.Add($line)
-        }
+        $cfgContentList = [System.Collections.Generic.List[string]](Get-Content -Path $cfgPath)
 
         if ($cfgContentList.Contains($lineToMove) -and $cfgContentList.Contains($targetLine)) {
             [void]$cfgContentList.Remove($lineToMove)
