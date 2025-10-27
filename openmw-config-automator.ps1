@@ -1,6 +1,6 @@
 <# .VERSION_INFO
-    Backup Date: 2025-10-27 20:32:42
-    Lines Changed Since Last Backup: 3 (Corrected TOML and Configurator Call)
+    Backup Date: 2025-10-10 09:17:49
+    Lines Changed Since Last Backup: 30
 #>
 <#
 .SYNOPSIS
@@ -20,7 +20,7 @@
     09. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
     10. Generates the momw-customizations.toml file with correct formatting.
     11. Manages backups of the previous customization file and old log files.
-    12. Runs the MOMW configurator with the correct command and validator flag.
+    12. Runs the MOMW configurator with a native PowerShell progress bar.
     13. Restores custom post-processing settings to settings.cfg.
     14. Rearranges a specific line within the final openmw.cfg for load order optimization.
     15. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
@@ -28,50 +28,10 @@
 .NOTES
     This is a personal script, tailored for a specific workflow. It is provided as-is
     and is not a community project. No support will be provided.
-    
-.OPTIMIZATIONS_APPLIED
-    - Move-And-Clean-Backups function modularized.
-    - momw-configurator execution simplified: Replaced Start-Job/spinner with a direct '&' call and includes --run-validator.
-    - TOML file generation corrected to use proper multi-line array syntax ([]).
 #>
 
 # --- Clear Screen ---
 Clear-Host
-
-# --- Modular Functions ---
-
-function Move-And-Clean-Backups {
-    param(
-        [Parameter(Mandatory=$true)][string]$SourceDir, 
-        [Parameter(Mandatory=$true)][string]$DestDir, 
-        [Parameter(Mandatory=$true)][string]$Pattern, 
-        [Parameter(Mandatory=$true)][int]$KeepCount
-    )
-    Write-Host "  Processing backups for pattern: $Pattern" -ForegroundColor DarkGray
-    $sourceBackups = Get-ChildItem -Path $SourceDir -Filter $Pattern | Sort-Object CreationTime -Descending
-    
-    if ($sourceBackups.Count -gt 0) {
-        # Move the latest files to the permanent backup directory
-        $sourceBackups | Select-Object -First $KeepCount | ForEach-Object {
-            Write-Host "    Moving '$($_.Name)' to backups folder." -ForegroundColor Gray
-            Move-Item -Path $_.FullName -Destination $DestDir -Force
-        }
-        # Delete any remaining old files from the *source* directory
-        Get-ChildItem -Path $SourceDir -Filter $Pattern | ForEach-Object {
-            Write-Host "    Deleting old backup from source: '$($_.Name)'" -ForegroundColor Magenta
-            Remove-Item -Path $_.FullName -Force
-        }
-    }
-    
-    # Clean the *destination* directory (archive)
-    $destBackups = Get-ChildItem -Path $DestDir -Filter $Pattern | Sort-Object CreationTime -Descending
-    if ($destBackups.Count -gt $KeepCount) {
-        $destBackups | Select-Object -Skip $KeepCount | ForEach-Object {
-            Write-Host "    Pruning oldest backup from archive: '$($_.Name)'" -ForegroundColor Magenta
-            Remove-Item -Path $_.FullName -Force
-        }
-    }
-}
 
 # --- Configuration ---
 # The relative path for the tool executables.
@@ -228,6 +188,31 @@ if ($ResolvedWorkingDirectory) {
         Write-Host "  Created backup directory: $cfgBackupDir" -ForegroundColor DarkGray
     }
 
+    function Move-And-Clean-Backups {
+        param([string]$SourceDir, [string]$DestDir, [string]$Pattern, [int]$KeepCount)
+        Write-Host "  Processing backups for pattern: $Pattern"
+        $sourceBackups = Get-ChildItem -Path $SourceDir -Filter $Pattern | Sort-Object CreationTime -Descending
+        
+        if ($sourceBackups.Count -gt 0) {
+            $sourceBackups | Select-Object -First $KeepCount | ForEach-Object {
+                Write-Host "    Moving '$($_.Name)' to backups folder." -ForegroundColor Gray
+                Move-Item -Path $_.FullName -Destination $DestDir -Force
+            }
+            Get-ChildItem -Path $SourceDir -Filter $Pattern | ForEach-Object {
+                Write-Host "    Deleting old backup from source: '$($_.Name)'" -ForegroundColor Magenta
+                Remove-Item -Path $_.FullName -Force
+            }
+        }
+        
+        $destBackups = Get-ChildItem -Path $DestDir -Filter $Pattern | Sort-Object CreationTime -Descending
+        if ($destBackups.Count -gt $KeepCount) {
+            $destBackups | Select-Object -Skip $KeepCount | ForEach-Object {
+                Write-Host "    Pruning oldest backup from archive: '$($_.Name)'" -ForegroundColor Magenta
+                Remove-Item -Path $_.FullName -Force
+            }
+        }
+    }
+
     $backupPatterns = @("openmw.cfg.backup.*", "settings.cfg.backup.*", "shaders.yaml.backup.*")
     foreach ($pattern in $backupPatterns) {
         Move-And-Clean-Backups -SourceDir $OutputDirectory -DestDir $cfgBackupDir -Pattern $pattern -KeepCount 7
@@ -239,29 +224,19 @@ if ($ResolvedWorkingDirectory) {
 Write-Host "`nSanitizing top-level folder names in '$ModRootDirectory'..." -ForegroundColor Cyan
 
 $scriptSuccessfullyCompleted = $true # Assume success until an error occurs
-$sanitizedNames = @{} # Dictionary to check for name collisions
 
 Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
     $oldName = $_.Name
-    $newName = $oldName -replace "[^a-zA-Z0-9]", "" # Remove non-alphanumeric chars
+    $newName = $oldName -replace "[^a-zA-Z0-9]", ""
     
-    # Check for collisions before renaming
-    if ($sanitizedNames.ContainsKey($newName)) {
-        Write-Warning "Skipping rename for '$oldName': '$newName' already exists due to collision with '$($sanitizedNames[$newName])'. Resolve manually."
-        return # Skip this item
-    }
-
     if ($oldName -ne $newName) {
         try {
             Rename-Item -Path $_.FullName -NewName $newName -ErrorAction Stop
             Write-Host "  Renamed: $oldName -> $newName" -ForegroundColor Yellow
-            $sanitizedNames[$newName] = $newName
         }
         catch {
             Write-Warning "Could not rename '$oldName' to '$newName'. It might be in use or a folder with that name already exists."
         }
-    } else {
-        $sanitizedNames[$newName] = $newName
     }
 }
 
@@ -451,7 +426,8 @@ if ($finalModPaths.Count -eq 0) {
 Write-Host "`n--- Summary of mods to be included ---" -ForegroundColor White
 $allModPaths = $finalModPaths | Sort-Object -Unique
 
-# The path escaping for the TOML file is done here.
+# This collection ($formattedModPaths) is still used to build the TOML file.
+# We are just changing what happens inside the loop to customize the console output.
 $formattedModPaths = $allModPaths | ForEach-Object {
     $currentPath = $_
     $relativePath = $currentPath.Replace($ModRootDirectory, "")
@@ -474,14 +450,14 @@ $formattedModPaths = $allModPaths | ForEach-Object {
         Write-Host ""
     }
     
-    # This part is crucial: must be enclosed in quotes and have backslashes escaped.
-    # This is the line that gets collected for the TOML array.
-    '  "' + ($currentPath -replace '\\', '\\') + '"'
+    # This part is crucial: the last output of the ForEach-Object block
+    # is what gets collected into $formattedModPaths for the TOML generation.
+    $currentPath -replace '\\', '\\'
 }
 
+# This line is still required to build the $filesBlock for the TOML file.
 $modFilenames = $finalPluginFiles.Name | Sort-Object -Unique
-$filesBlock = $modFilenames | ForEach-Object { '  "' + $_ + '"' }
-
+# The separate "Plugins:" block has been removed as it's now inline.
 
 Write-Host "`nGenerating TOML content..." -ForegroundColor Cyan
 
@@ -510,10 +486,8 @@ if ($ExclusionsDirectoryPath) {
     }
 }
 
-$pathsBlock = $formattedModPaths -join ",`n" # Join with comma and newline for multi-line array
-$filesBlockString = $filesBlock -join ",`n" # Join with comma and newline for multi-line array
-
-# CORRECTED TOML HEREDOC: Uses the proper TOML array syntax
+$pathsBlock = $formattedModPaths -join "`n"
+$filesBlock = $modFilenames -join "`n"
 $tomlContent = @"
 [[Customizations]]
 listName = "expanded-vanilla"
@@ -521,15 +495,14 @@ removeFallback = ["Movies_Company_Logo,bethesda logo.bik", "Movies_Morrowind_Log
 $removeDataBlock
 $removeContentBlock
 [[Customizations.insert]]
-insertBlock = [
+insertBlock = """
 $pathsBlock
-]
+"""
 before = "Tools\\MOMWToolsPackCustom"
-
-[[Customizations.insert]]
-insertBlock = [
-$filesBlockString
-]
+[[CustomDustomizations.insert]]
+insertBlock = """
+$filesBlock
+"""
 before = "AttendMe.omwscripts"
 "@
 
@@ -567,15 +540,18 @@ if ($scriptSuccessfullyCompleted) {
         $configuratorPath = Join-Path -Path $resolvedToolsPath -ChildPath "momw-configurator.exe"
         if (-not (Test-Path $configuratorPath)) { throw "momw-configurator.exe not found at: $configuratorPath" }
 
-        # --- FINAL CORRECTED EXECUTION COMMAND ---
-        Write-Host "Executing: momw-configurator.exe config --verbose --run-validator expanded-vanilla" -ForegroundColor Yellow
-        Write-Host "Processing... (This includes running the validator and may take a moment)" -ForegroundColor DarkGray
+        $job = Start-Job -ScriptBlock { & $using:configuratorPath config expanded-vanilla --verbose 2>&1 }
         
-        # Execute the configurator with the correct arguments and capture all output/errors
-        $output = & $configuratorPath config --verbose --run-validator expanded-vanilla 2>&1
-        
+        $spinner = '|', '/', '-', '\'
+        $spinnerIndex = 0
+        while ($job.State -eq 'Running') {
+            Write-Progress -Activity "Running MOMW Configurator" -Status ("Processing... " + $spinner[$spinnerIndex])
+            Start-Sleep -Milliseconds 150
+            $spinnerIndex = ($spinnerIndex + 1) % $spinner.Length
+        }
         Write-Progress -Activity "Running MOMW Configurator" -Completed
         
+        $output = Receive-Job $job
         $lastLine = $output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1
         $ignorePatterns = @('Skipping record of type SCPT', 'could not be loaded due to error: Unexpected Tag: LUAL', 'ignored empty value for key')
 
@@ -595,6 +571,7 @@ if ($scriptSuccessfullyCompleted) {
         $scriptSuccessfullyCompleted = $false
         Write-Host "A critical error occurred while running the configurator: $($_.Exception.Message)" -ForegroundColor Red
     }
+    finally { if ($job) { Remove-Job $job -Force } }
 
     if (-not $scriptSuccessfullyCompleted) {
         if ($lastLine) {
@@ -627,8 +604,8 @@ if ($scriptSuccessfullyCompleted -and $customChainValue) {
             # Find the first 'chain' line *after* finding the section
             if ($postProcessingIndex -ne -1 -and $existingChainIndex -eq -1 -and $settingsContentList[$i].Trim().StartsWith("chain")) {
                 $existingChainIndex = $i
-                # We found the line to replace
-                break # Break early since we only want the first match
+                # We found the line to replace, but we don't break, 
+                # just in case the section is empty and we need the $postProcessingIndex
             }
         }
         
@@ -669,32 +646,20 @@ if ($scriptSuccessfullyCompleted) {
             $cfgContentList.Add($line)
         }
 
-        $lineWasPresent = $cfgContentList.Contains($lineToMove)
-        
-        if ($lineWasPresent) {
+        if ($cfgContentList.Contains($lineToMove) -and $cfgContentList.Contains($targetLine)) {
             [void]$cfgContentList.Remove($lineToMove)
-        }
-        
-        $targetIndex = $cfgContentList.IndexOf($targetLine)
-        
-        if ($targetIndex -ge 0) {
+            $targetIndex = $cfgContentList.IndexOf($targetLine)
             $cfgContentList.Insert($targetIndex, $lineToMove)
             Set-Content -Path $cfgPath -Value $cfgContentList
-            
-            if ($lineWasPresent) {
-                Write-Host "Successfully moved '$lineToMove' in openmw.cfg." -ForegroundColor Green
-            } else {
-                Write-Host "Added '$lineToMove' to openmw.cfg as it was missing." -ForegroundColor Green
-            }
-        } else { 
-            if ($lineWasPresent) {
-                # If the target line wasn't found, re-add the line to move to the end if it was removed
-                $cfgContentList.Add($lineToMove)
+            Write-Host "Successfully moved '$lineToMove' in openmw.cfg." -ForegroundColor Green
+        } else {
+            $targetIndex = $cfgContentList.IndexOf($targetLine)
+            if ($targetIndex -ge 0) {
+                $cfgContentList.Insert($targetIndex, $lineToMove)
                 Set-Content -Path $cfgPath -Value $cfgContentList
-            }
-            Write-Host "Could not find target line '$targetLine' in openmw.cfg. Skipping tweak." -ForegroundColor Yellow 
+                Write-Host "Added '$lineToMove' to openmw.cfg as it was missing." -ForegroundColor Green
+            } else { Write-Host "Could not find target line '$targetLine' in openmw.cfg. Skipping tweak." -ForegroundColor Yellow }
         }
-
     }
     catch {
         $scriptSuccessfullyCompleted = $false
