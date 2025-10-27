@@ -1,6 +1,6 @@
 <# .VERSION_INFO
-    Backup Date: 2025-10-10 09:17:49
-    Lines Changed Since Last Backup: 30
+    Backup Date: 2025-10-27 20:32:42
+    Lines Changed Since Last Backup: 3 (Corrected TOML and Configurator Call)
 #>
 <#
 .SYNOPSIS
@@ -20,7 +20,7 @@
     09. Reads custom exclusion files ('exclusions\removedata.txt', 'exclusions\removecontent.txt').
     10. Generates the momw-customizations.toml file with correct formatting.
     11. Manages backups of the previous customization file and old log files.
-    12. Runs the MOMW configurator with a native PowerShell progress bar.
+    12. Runs the MOMW configurator with the correct command and validator flag.
     13. Restores custom post-processing settings to settings.cfg.
     14. Rearranges a specific line within the final openmw.cfg for load order optimization.
     15. Conditionally calls the 'save-to-git.ps1' script based on content hash changes or time.
@@ -30,9 +30,9 @@
     and is not a community project. No support will be provided.
     
 .OPTIMIZATIONS_APPLIED
-    - Move-And-Clean-Backups function modularized (moved to top).
-    - momw-configurator execution simplified: Replaced Start-Job/spinner with a direct '&' call.
-    - Path sanitization logic improved to ensure unique names.
+    - Move-And-Clean-Backups function modularized.
+    - momw-configurator execution simplified: Replaced Start-Job/spinner with a direct '&' call and includes --run-validator.
+    - TOML file generation corrected to use proper multi-line array syntax ([]).
 #>
 
 # --- Clear Screen ---
@@ -474,9 +474,8 @@ $formattedModPaths = $allModPaths | ForEach-Object {
         Write-Host ""
     }
     
-    # This part is crucial: the last output of the ForEach-Object block
-    # is what gets collected into $formattedModPaths for the TOML generation.
-    # The string must be enclosed in quotes and have backslashes escaped for TOML string arrays.
+    # This part is crucial: must be enclosed in quotes and have backslashes escaped.
+    # This is the line that gets collected for the TOML array.
     '  "' + ($currentPath -replace '\\', '\\') + '"'
 }
 
@@ -511,9 +510,10 @@ if ($ExclusionsDirectoryPath) {
     }
 }
 
-$pathsBlock = $formattedModPaths -join "`n"
-$filesBlockString = $filesBlock -join "`n"
+$pathsBlock = $formattedModPaths -join ",`n" # Join with comma and newline for multi-line array
+$filesBlockString = $filesBlock -join ",`n" # Join with comma and newline for multi-line array
 
+# CORRECTED TOML HEREDOC: Uses the proper TOML array syntax
 $tomlContent = @"
 [[Customizations]]
 listName = "expanded-vanilla"
@@ -551,10 +551,6 @@ if (Test-Path $OutputFile) {
 
 Write-Host "`nWriting configuration to $OutputFile..." -ForegroundColor Cyan
 try {
-    # Fix: The TOML generation in the original script used multiline strings, 
-    # but the expected TOML format for listName's contents seems to be an array.
-    # The structure has been corrected to use the TOML array format `[ "item1", "item2" ]`
-    # or the multi-line array format `[ \n "item1", \n "item2" \n ]`.
     Set-Content -Path $OutputFile -Value $tomlContent -Encoding UTF8 -ErrorAction Stop
     Write-Host "Successfully created $OutputFile!" -ForegroundColor Green
 }
@@ -571,9 +567,13 @@ if ($scriptSuccessfullyCompleted) {
         $configuratorPath = Join-Path -Path $resolvedToolsPath -ChildPath "momw-configurator.exe"
         if (-not (Test-Path $configuratorPath)) { throw "momw-configurator.exe not found at: $configuratorPath" }
 
-        # --- OPTIMIZATION: Replaced Start-Job with direct call (&) ---
-        Write-Host "Processing... (This may take a moment)" -ForegroundColor DarkGray
-        $output = & $configuratorPath config expanded-vanilla --verbose 2>&1
+        # --- FINAL CORRECTED EXECUTION COMMAND ---
+        Write-Host "Executing: momw-configurator.exe config --verbose --run-validator expanded-vanilla" -ForegroundColor Yellow
+        Write-Host "Processing... (This includes running the validator and may take a moment)" -ForegroundColor DarkGray
+        
+        # Execute the configurator with the correct arguments and capture all output/errors
+        $output = & $configuratorPath config --verbose --run-validator expanded-vanilla 2>&1
+        
         Write-Progress -Activity "Running MOMW Configurator" -Completed
         
         $lastLine = $output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1
@@ -595,7 +595,6 @@ if ($scriptSuccessfullyCompleted) {
         $scriptSuccessfullyCompleted = $false
         Write-Host "A critical error occurred while running the configurator: $($_.Exception.Message)" -ForegroundColor Red
     }
-    # Removed unnecessary 'finally' block for job cleanup
 
     if (-not $scriptSuccessfullyCompleted) {
         if ($lastLine) {
