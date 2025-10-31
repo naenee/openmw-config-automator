@@ -120,7 +120,7 @@ if ($ResolvedWorkingDirectory) {
     if ($allBackups.Count -gt $BackupVersionsToKeep) {
         $allBackups | Select-Object -Skip $BackupVersionsToKeep | ForEach-Object {
             Write-Host "  Removing old backup: $($_.Name)" -ForegroundColor Magenta
-            Remove-Item -Path $_.FullName -Force
+            Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -140,7 +140,7 @@ if ($ResolvedWorkingDirectory) {
         $logsToDelete = $allLogs | Select-Object -Skip ($LogVersionsToKeep - 1)
         foreach ($log in $logsToDelete) {
             Write-Host "  Removing old log: $($log.Name)" -ForegroundColor Magenta
-            Remove-Item -Path $log.FullName -Force
+            Remove-Item -Path $log.FullName -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -200,7 +200,7 @@ if ($ResolvedWorkingDirectory) {
             }
             Get-ChildItem -Path $SourceDir -Filter $Pattern | ForEach-Object {
                 Write-Host "    Deleting old backup from source: '$($_.Name)'" -ForegroundColor Magenta
-                Remove-Item -Path $_.FullName -Force
+                Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
             }
         }
         
@@ -208,7 +208,7 @@ if ($ResolvedWorkingDirectory) {
         if ($destBackups.Count -gt $KeepCount) {
             $destBackups | Select-Object -Skip $KeepCount | ForEach-Object {
                 Write-Host "    Pruning oldest backup from archive: '$($_.Name)'" -ForegroundColor Magenta
-                Remove-Item -Path $_.FullName -Force
+                Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
             }
         }
     }
@@ -499,7 +499,7 @@ insertBlock = """
 $pathsBlock
 """
 before = "Tools\\MOMWToolsPackCustom"
-[[CustomDustomizations.insert]]
+[[Customizations.insert]]
 insertBlock = """
 $filesBlock
 """
@@ -517,13 +517,14 @@ if (Test-Path $OutputFile) {
     if ($allBackups.Count -gt $BackupVersionsToKeep) {
         $allBackups | Select-Object -Skip $BackupVersionsToKeep | ForEach-Object {
             Write-Host "  Removing old backup: $($_.Name)" -ForegroundColor Magenta
-            Remove-Item -Path $_.FullName -Force
+            Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
         }
     }
 }
 
 Write-Host "`nWriting configuration to $OutputFile..." -ForegroundColor Cyan
 try {
+    # In PowerShell 7+, -Encoding UTF8 correctly creates a file WITHOUT a BOM by default.
     Set-Content -Path $OutputFile -Value $tomlContent -Encoding UTF8 -ErrorAction Stop
     Write-Host "Successfully created $OutputFile!" -ForegroundColor Green
 }
