@@ -1,3 +1,7 @@
+<# .VERSION_INFO
+    Backup Date: 2025-10-10 09:17:49
+    Lines Changed Since Last Backup: 30
+#>
 <#
 .SYNOPSIS
     Performs a self-backup, cleans mod folder names, interactively handles nested mod options,
@@ -51,39 +55,7 @@ $LogVersionsToKeep = 7
 
 # --- Script Body ---
 
-# --- 01. Preserve Custom Post Processing Chain ---
-# MOVED: This is now run first to ensure the value is saved before any other operation.
-Write-Host "Checking for post processing chain in settings.cfg..." -ForegroundColor Cyan
-$customChainValue = $null
-$settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
-
-if (Test-Path $settingsCfgPath) {
-    try {
-        $settingsContent = Get-Content -Path $settingsCfgPath -ErrorAction Stop
-        $inPostProcessingSection = $false
-        foreach ($line in $settingsContent) {
-            if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
-            if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
-            if ($inPostProcessingSection -and $line.Trim().StartsWith("chain")) {
-                $customChainValue = $line # Store the entire original line
-                Write-Host "  Found existing post processing chain. It will be restored after configuration." -ForegroundColor Green
-                Write-Host "    $($customChainValue.Trim())" -ForegroundColor DarkGray
-                break
-            }
-        }
-        if (-not $customChainValue) {
-            Write-Host "  No 'chain' entry found in [Post Processing] section. No value to restore." -ForegroundColor Gray
-        }
-    }
-    catch {
-        Write-Warning "  Error reading settings.cfg: $($_.Exception.Message). Cannot preserve post processing chain."
-    }
-} else {
-    Write-Warning "  settings.cfg not found. Cannot preserve post processing chain."
-}
-
-
-# --- 02. Resolve Working Directory ---
+# --- 01. Resolve Working Directory ---
 $ResolvedWorkingDirectory = $null
 if ($PSScriptRoot) {
     $ResolvedWorkingDirectory = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath $WorkingDirectory)
@@ -96,7 +68,7 @@ if ($PSScriptRoot) {
 }
 
 
-# --- 03. Self-Backup and Versioning ---
+# --- 02. Self-Backup and Versioning ---
 Write-Host "Performing self-backup and versioning..." -ForegroundColor Cyan
 
 $thisScriptPath = $MyInvocation.MyCommand.Path
@@ -139,7 +111,7 @@ if ($ResolvedWorkingDirectory) {
     $newBackupName = "$thisScriptName.backup.$timestamp.ps1"
     $newBackupPath = Join-Path -Path $selfBackupDir -ChildPath $newBackupName
     
-    Set-Content -Path $newBackupPath -Value ($header, $currentScriptContent)
+    ($header + "`n" + ($currentScriptContent | Out-String)) | Set-Content -Path $newBackupPath
     Set-Content -Path $hashFilePath -Value $currentHash
 
     Write-Host "  Successfully created backup: $newBackupName" -ForegroundColor Green
@@ -154,7 +126,7 @@ if ($ResolvedWorkingDirectory) {
 }
 
 
-# --- 04. Setup Logging ---
+# --- 03. Setup Logging ---
 if ($ResolvedWorkingDirectory) {
     $logDir = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "log"
     if (-not (Test-Path $logDir)) {
@@ -180,7 +152,7 @@ if ($ResolvedWorkingDirectory) {
     Write-Host "Logging output to: $($newLogFileName)" -ForegroundColor DarkGray
 }
 
-# --- 05. Load or Prompt for ModRootDirectory ---
+# --- 04. Load or Prompt for ModRootDirectory ---
 $ModRootDirectory = $null
 $configFilePath = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "config.json"
 
@@ -206,7 +178,7 @@ while (-not $ModRootDirectory) {
     }
 }
 
-# --- 06. Organize External Backups ---
+# --- 05. Organize External Backups ---
 Write-Host "`nOrganizing external OpenMW backups..." -ForegroundColor Cyan
 
 if ($ResolvedWorkingDirectory) {
@@ -248,7 +220,7 @@ if ($ResolvedWorkingDirectory) {
 }
 
 
-# --- 07. Sanitize Top-Level Folder Names ---
+# --- 06. Sanitize Top-Level Folder Names ---
 Write-Host "`nSanitizing top-level folder names in '$ModRootDirectory'..." -ForegroundColor Cyan
 
 $scriptSuccessfullyCompleted = $true # Assume success until an error occurs
@@ -266,6 +238,33 @@ Get-ChildItem -Path $ModRootDirectory -Directory | ForEach-Object {
             Write-Warning "Could not rename '$oldName' to '$newName'. It might be in use or a folder with that name already exists."
         }
     }
+}
+
+# --- 07. Preserve Custom Post Processing Chain ---
+Write-Host "`nChecking for custom post processing chain in settings.cfg..." -ForegroundColor Cyan
+$customChainValue = $null
+$settingsCfgPath = Join-Path -Path $OutputDirectory -ChildPath "settings.cfg"
+$defaultChain = "ssao_hq,underwater_interior_effects,underwater_effects,clouds,godrays,bloomlinear,hdr,FollowerAA,war_adjustments"
+
+if (Test-Path $settingsCfgPath) {
+    $settingsContent = Get-Content -Path $settingsCfgPath
+    $inPostProcessingSection = $false
+    foreach ($line in $settingsContent) {
+        if ($line.Trim() -eq "[Post Processing]") { $inPostProcessingSection = $true; continue }
+        if ($inPostProcessingSection -and $line.Trim().StartsWith("[")) { $inPostProcessingSection = $false; break }
+        if ($inPostProcessingSection -and $line.Trim().StartsWith("chain")) {
+            $currentChain = ($line -split '=', 2)[1].Trim()
+            if ($currentChain -ne $defaultChain) {
+                $customChainValue = $line # Store the entire original line
+                Write-Host "  Found custom post processing chain. It will be restored after configuration." -ForegroundColor Green
+            } else {
+                Write-Host "  Post processing chain is set to default. No action needed." -ForegroundColor Gray
+            }
+            break
+        }
+    }
+} else {
+    Write-Warning "  settings.cfg not found. Cannot preserve custom post processing chain."
 }
 
 
@@ -306,14 +305,12 @@ while ($processingQueue.Count -gt 0) {
 
     if ($numberedOptions.Count -gt 0) {
         if ($numberedOptions.Count -eq 1 -and $numberedOptions[0].Name -imatch '00 Core*') {
-            Write-Host ""
-            Write-Host "Options for '$topLevelModName' in '$($currentItem.PathToProcess | Split-Path -Leaf)':" -ForegroundColor Yellow
+            Write-Host "\nOptions for '$topLevelModName' in '$($currentItem.PathToProcess | Split-Path -Leaf)':" -ForegroundColor Yellow
             Write-Host "  Automatically selecting single '00 Core' option." -ForegroundColor Green
             $queueObject = [PSCustomObject]@{ TopLevelModName = $topLevelModName; PathToProcess = $numberedOptions[0].FullName }
             $processingQueue.Enqueue($queueObject)
         } else {
-            Write-Host ""
-            Write-Host "Options for '$topLevelModName' in '$($currentItem.PathToProcess | Split-Path -Leaf)':" -ForegroundColor Yellow
+            Write-Host "\nOptions for '$topLevelModName' in '$($currentItem.PathToProcess | Split-Path -Leaf)':" -ForegroundColor Yellow
             $safeChoicePath = $currentPath.Replace($ModRootDirectory, "").Trim("\") -replace '[^a-zA-Z0-9]', '_'
             $folderChoiceKey = "$($topLevelModName)_$($safeChoicePath)"
             $folderChoiceFile = if ($ChoicesDirectoryPath) { Join-Path -Path $ChoicesDirectoryPath -ChildPath "$folderChoiceKey.txt" } else { $null }
@@ -360,14 +357,14 @@ while ($processingQueue.Count -gt 0) {
             $dataDirectories = [System.Collections.Generic.List[string]]::new()
             if ($pluginsInPath.Count -gt 0) {
                 $pluginParentDirs = $pluginsInPath | ForEach-Object { $_.Directory.FullName } | Sort-Object -Unique
-                foreach ($dir in $pluginParentDirs) { $dataDirectories.Add($dir) }
+                foreach ($dir in @($pluginParentDirs)) { $dataDirectories.Add($dir) }
             }
             if ($dataFoldersInPath.Count -gt 0) {
                 $dataFolderParentDirs = $dataFoldersInPath | ForEach-Object { $_.Parent.FullName } | Sort-Object -Unique
-                foreach ($dir in $dataFolderParentDirs) { $dataDirectories.Add($dir) }
+                foreach ($dir in @($dataFolderParentDirs)) { $dataDirectories.Add($dir) }
             }
             $uniqueDataDirs = $dataDirectories | Sort-Object -Unique
-            foreach ($dir in $uniqueDataDirs) { $finalModPaths.Add($dir) }
+            foreach ($dir in @($uniqueDataDirs)) { $finalModPaths.Add($dir) }
 
             $espFilesInMod = $pluginsInPath | Where-Object { $_.Extension -eq ".esp" }
             if ($espFilesInMod.Count -gt 1) {
@@ -377,7 +374,7 @@ while ($processingQueue.Count -gt 0) {
                 $selectedPluginNames = @()
 
                 if ($pluginChoiceFile -and (Test-Path $pluginChoiceFile)) {
-                    $savedPluginNames = @(Get-Content $pluginChoiceFile)
+                    $savedPluginNames = Get-Content $pluginChoiceFile
                     $currentPluginNames = $pluginsInPath | Select-Object -ExpandProperty Name
                     if (($savedPluginNames | Where-Object { $currentPluginNames -icontains $_ } | Measure-Object).Count -eq $savedPluginNames.Count) {
                         $selectedPluginNames = $savedPluginNames
@@ -401,16 +398,9 @@ while ($processingQueue.Count -gt 0) {
                         }
                     } else { Write-Host "  Invalid plugin selection." -ForegroundColor Red }
                 }
-                
-                $selectedPluginSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::InvariantCultureIgnoreCase)
-                foreach ($pluginName in @($selectedPluginNames)) {
-                    $selectedPluginSet.Add($pluginName) | Out-Null
-                }
-
-                $pluginsInPath | Where-Object { $selectedPluginSet.Contains($_.Name) } | ForEach-Object { $finalPluginFiles.Add($_) }
-
+                $pluginsInPath | Where-Object { $selectedPluginNames -icontains $_.Name } | ForEach-Object { $finalPluginFiles.Add($_) }
             } else {
-                foreach ($plugin in $pluginsInPath) { $finalPluginFiles.Add($plugin) }
+                foreach ($plugin in @($pluginsInPath)) { $finalPluginFiles.Add($plugin) }
             }
         } else {
             $subDirectories = Get-ChildItem -Path $currentPath -Directory -ErrorAction SilentlyContinue
@@ -435,7 +425,7 @@ $allModPaths = $finalModPaths | Sort-Object -Unique
 $formattedModPaths = $allModPaths | ForEach-Object {
     $relativePath = $_.Replace($ModRootDirectory, "")
     Write-Host "  Path: ...$relativePath"
-    $_ -replace '\\', '\\\\'
+    $_ -replace '\\', '\\'
 }
 
 $modFilenames = $finalPluginFiles.Name | Sort-Object -Unique
@@ -453,7 +443,7 @@ if ($ExclusionsDirectoryPath) {
         $exclusionLines = Get-Content -Path $removeDataFilePath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         if ($exclusionLines.Count -gt 0) {
             Write-Host "  Found $($exclusionLines.Count) data exclusion(s)." -ForegroundColor Green
-            $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "' + ($_ -replace '\\', '\\\\') + '"' }
+            $formattedExclusionLines = $exclusionLines | ForEach-Object { '  "' + ($_ -replace '\\', '\\') + '"' }
             $removeDataContent = $formattedExclusionLines -join ",`n"
             $removeDataBlock = "removeData = [`n$removeDataContent`n]"
         }
@@ -541,9 +531,10 @@ if ($scriptSuccessfullyCompleted) {
         $ignorePatterns = @('Skipping record of type SCPT', 'could not be loaded due to error: Unexpected Tag: LUAL', 'ignored empty value for key')
 
         $allWarningsAndErrors = $output | Where-Object { $_ -match 'warning' -or $_ -match 'error' }
-
-        $ignoreRegex = $ignorePatterns -join '|'
-        $relevantErrorsAndWarnings = $allWarningsAndErrors | Where-Object { $_ -notmatch $ignoreRegex }
+        $relevantErrorsAndWarnings = $allWarningsAndErrors
+        foreach ($pattern in $ignorePatterns) {
+            $relevantErrorsAndWarnings = $relevantErrorsAndWarnings | Where-Object { $_ -notmatch $pattern }
+        }
 
         if ($relevantErrorsAndWarnings.Count -gt 0) {
             $scriptSuccessfullyCompleted = $false
@@ -566,40 +557,46 @@ if ($scriptSuccessfullyCompleted) {
 }
 
 if ($scriptSuccessfullyCompleted -and $customChainValue) {
-    Write-Host "`nRestoring post processing chain..." -ForegroundColor Cyan
+    Write-Host "`nRestoring custom post processing chain..." -ForegroundColor Cyan
     try {
-        $settingsContentList = [System.Collections.Generic.List[string]](Get-Content -Path $settingsCfgPath)
+        $settingsContentArray = @(Get-Content -Path $settingsCfgPath)
+        $settingsContentList = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in $settingsContentArray) {
+            $settingsContentList.Add($line)
+        }
 
         $postProcessingIndex = -1
-        $existingChainIndex = -1
-
         for ($i = 0; $i -lt $settingsContentList.Count; $i++) {
             if ($settingsContentList[$i].Trim() -eq "[Post Processing]") {
                 $postProcessingIndex = $i
-                continue
-            }
-            if ($postProcessingIndex -ne -1 -and $settingsContentList[$i].Trim().StartsWith("[")) {
                 break
-            }
-            if ($postProcessingIndex -ne -1 -and $existingChainIndex -eq -1 -and $settingsContentList[$i].Trim().StartsWith("chain")) {
-                $existingChainIndex = $i
             }
         }
         
-        if ($existingChainIndex -ne -1) {
-            Write-Host "  Replacing existing chain line with saved value." -ForegroundColor Green
-            $settingsContentList[$existingChainIndex] = $customChainValue
-        }
-        elseif ($postProcessingIndex -ne -1) {
-            # No chain line found, but the section exists. Insert it.
-            Write-Host "  No existing chain line found. Inserting saved value into [Post Processing] section." -ForegroundColor Green
+        if ($postProcessingIndex -ne -1) {
+            # Find the end of the section
+            $sectionEndIndex = $settingsContentList.Count
+            for ($i = $postProcessingIndex + 1; $i -lt $settingsContentList.Count; $i++) {
+                if ($settingsContentList[$i].Trim().StartsWith("[")) {
+                    $sectionEndIndex = $i
+                    break
+                }
+            }
+            
+            # Comment out any existing "chain" lines within the section
+            for ($i = $postProcessingIndex + 1; $i -lt $sectionEndIndex; $i++) {
+                if ($settingsContentList[$i].Trim().StartsWith("chain")) {
+                    $settingsContentList[$i] = "#" + $settingsContentList[$i]
+                }
+            }
+            
+            # Insert the custom chain at the top of the section
             $settingsContentList.Insert($postProcessingIndex + 1, $customChainValue)
-        }
-        else {
+            Set-Content -Path $settingsCfgPath -Value $settingsContentList
+            Write-Host "  Successfully restored custom post processing chain." -ForegroundColor Green
+        } else {
             Write-Warning "  Could not find '[Post Processing]' section. Custom setting was not restored."
         }
-
-        Set-Content -Path $settingsCfgPath -Value $settingsContentList
     }
     catch {
         Write-Error "An error occurred while restoring the post processing chain: $($_.Exception.Message)"
@@ -616,7 +613,11 @@ if ($scriptSuccessfullyCompleted) {
     try {
         if (-not (Test-Path $cfgPath)) { throw "openmw.cfg not found at $cfgPath" }
 
-        $cfgContentList = [System.Collections.Generic.List[string]](Get-Content -Path $cfgPath)
+        $cfgContentArray = @(Get-Content -Path $cfgPath)
+        $cfgContentList = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in $cfgContentArray) {
+            $cfgContentList.Add($line)
+        }
 
         if ($cfgContentList.Contains($lineToMove) -and $cfgContentList.Contains($targetLine)) {
             [void]$cfgContentList.Remove($lineToMove)
@@ -666,3 +667,5 @@ if ($scriptSuccessfullyCompleted) {
 Write-Host "`nAll steps completed!" -ForegroundColor Green
 
 if ($global:Transcript) { Stop-Transcript }
+
+
