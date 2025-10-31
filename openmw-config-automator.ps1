@@ -524,8 +524,12 @@ if (Test-Path $OutputFile) {
 
 Write-Host "`nWriting configuration to $OutputFile..." -ForegroundColor Cyan
 try {
-    # In PowerShell 7+, -Encoding UTF8 correctly creates a file WITHOUT a BOM by default.
-    Set-Content -Path $OutputFile -Value $tomlContent -Encoding UTF8 -ErrorAction Stop
+    # Create a UTF-8 encoding object *without* the Byte Order Mark (BOM)
+    $utf8NoBOM = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false
+    
+    # Use the .NET File class to write the text, explicitly passing our $utf8NoBOM encoding
+    [System.IO.File]::WriteAllText($OutputFile, $tomlContent, $utf8NoBOM)
+    
     Write-Host "Successfully created $OutputFile!" -ForegroundColor Green
 }
 catch {
@@ -598,7 +602,7 @@ if ($scriptSuccessfullyCompleted -and $customChainValue) {
                 $postProcessingIndex = $i
                 continue
             }
-            # Stop searching if we hit the next section
+            # Stop searching if the next section is hit
             if ($postProcessingIndex -ne -1 -and $settingsContentList[$i].Trim().StartsWith("[")) {
                 break
             }
