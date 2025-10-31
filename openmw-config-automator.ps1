@@ -30,6 +30,13 @@
     and is not a community project. No support will be provided.
 #>
 
+[CmdletBinding()]
+param (
+    # Switch to create a 'verified' backup and upload to GitHub.
+    # Run this *after* you have tested the game and confirmed it works.
+    [switch]$Git
+)
+
 # --- Clear Screen ---
 Clear-Host
 
@@ -67,12 +74,63 @@ if ($PSScriptRoot) {
     Write-Warning "Could not determine script location. Logging and choice saving will be disabled."
 }
 
-
-# --- 02. Self-Backup and Versioning ---
-Write-Host "Performing self-backup and versioning..." -ForegroundColor Cyan
-
+# Define script paths here for use in both -Git and normal backup modes
 $thisScriptPath = $MyInvocation.MyCommand.Path
 $thisScriptName = Split-Path -Path $thisScriptPath -Leaf
+
+
+# --- NEW: Handle -Git switch immediately ---
+# If -Git is present, only perform verified backup and upload, then exit.
+if ($Git) {
+    Write-Host "`n-Git switch detected. Creating verified backup and uploading..." -ForegroundColor Cyan
+
+    if ($ResolvedWorkingDirectory) {
+        # 1. Create the verified backup
+        $verifiedBackupDir = Join-Path -Path $ResolvedWorkingDirectory -ChildPath "script_backups_verified"
+        if (-not (Test-Path $verifiedBackupDir)) {
+            New-Item -ItemType Directory -Path $verifiedBackupDir | Out-Null
+        }
+
+        $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+        $verifiedBackupName = "$thisScriptName.backup.$timestamp.ps1"
+        $verifiedBackupPath = Join-Path -Path $verifiedBackupDir -ChildPath $verifiedBackupName
+        
+        Copy-Item -Path $thisScriptPath -Destination $verifiedBackupPath
+        Write-Host "  Successfully created verified backup: $verifiedBackupName" -ForegroundColor Green
+
+        # 2. Prune old verified backups
+        $allVerifiedBackups = Get-ChildItem -Path $verifiedBackupDir -Filter "$thisScriptName.backup.*.ps1" | Sort-Object CreationTime -Descending
+        if ($allVerifiedBackups.Count -gt $BackupVersionsToKeep) {
+            $allVerifiedBackups | Select-Object -Skip $BackupVersionsToKeep | ForEach-Object {
+                Write-Host "  Removing old verified backup: $($_.Name)" -ForegroundColor Magenta
+                Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    else {
+        Write-Warning "Could not resolve working directory. Verified backup skipped."
+    }
+
+    # 3. Call the GitHub script
+    Write-Host "  Calling GitHub save script..." -ForegroundColor Cyan
+    $githubScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "save-to-git.ps1"
+    if (Test-Path $githubScriptPath) {
+        & $githubScriptPath
+    }
+    else {
+        Write-Warning "GitHub save script not found at '$githubScriptPath'. Skipping save."
+    }
+
+    Write-Host "`nGit tasks completed!" -ForegroundColor Green
+    if ($global:Transcript) { Stop-Transcript }
+    exit # Exit the script here
+}
+
+
+# --- 02. Self-Backup and Versioning (Staging Backup) ---
+# This block is now only run during a NORMAL (non-Git) run.
+Write-Host "Performing self-backup and versioning..." -ForegroundColor Cyan
+
 $contentHasChanged = $false
 $timeSinceLastBackup = $null
 
@@ -602,7 +660,7 @@ if ($scriptSuccessfullyCompleted -and $customChainValue) {
                 $postProcessingIndex = $i
                 continue
             }
-            # Stop searching if the next section is hit
+            # Stop searching if we hit the next section
             if ($postProcessingIndex -ne -1 -and $settingsContentList[$i].Trim().StartsWith("[")) {
                 break
             }
@@ -672,29 +730,16 @@ if ($scriptSuccessfullyCompleted) {
     }
 }
 
+
+# --- Final Status Message ---
+# This block is only reached on a NORMAL (non-Git) run.
 if ($scriptSuccessfullyCompleted) {
-    Write-Host "`nChecking conditions for GitHub backup..." -ForegroundColor Cyan
-    $timeThreshold = New-TimeSpan -Hours 24
-    $triggerUpload = $false
-    $reason = ""
-
-    if ($contentHasChanged) {
-        $triggerUpload = $true
-        $reason = "Script content has changed since last backup."
-    }
-    elseif ($timeSinceLastBackup -and ($timeSinceLastBackup -gt $timeThreshold)) {
-        $triggerUpload = $true
-        $reason = "Daily backup triggered (last backup was $($timeSinceLastBackup.Days)d, $($timeSinceLastBackup.Hours)h ago)."
-    }
-
-    if ($triggerUpload) {
-        Write-Host "  Upload condition met: $reason" -ForegroundColor Green
-        Write-Host "  Calling GitHub save script..." -ForegroundColor Cyan
-        $githubScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "save-to-git.ps1"
-        if (Test-Path $githubScriptPath) { & $githubScriptPath }
-        else { Write-Warning "GitHub save script not found at '$githubScriptPath'. Skipping save." }
-    } else { Write-Host "  Upload conditions not met (no changes and not enough time elapsed). Skipping GitHub backup." -ForegroundColor Gray }
-} else { Write-Host "`nSkipping GitHub backup due to errors encountered during script execution." -ForegroundColor Yellow }
+    Write-Host "`nScript completed successfully." -ForegroundColor Green
+    Write-Host "Run again with -Git to create a verified backup and upload to GitHub." -ForegroundColor Yellow
+}
+else {
+    Write-Host "`nScript failed. No verified backup or GitHub upload was performed." -ForegroundColor Red
+}
 
 Write-Host "`nAll steps completed!" -ForegroundColor Green
 
