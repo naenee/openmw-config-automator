@@ -525,7 +525,7 @@ if ($scriptSuccessfullyCompleted) {
         $configuratorPath = Join-Path -Path $resolvedToolsPath -ChildPath "momw-configurator.exe"
         if (-not (Test-Path $configuratorPath)) { throw "momw-configurator.exe not found at: $configuratorPath" }
 
-        $job = Start-Job -ScriptBlock { & $using:configuratorPath config expanded-vanilla --verbose 2>&1 }
+        $job = Start-Job -ScriptBlock { & $using:configuratorPath config --verbose --run-validator expanded-vanilla 2>&1 }
         
         $spinner = '|', '/', '-', '\'
         $spinnerIndex = 0
